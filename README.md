@@ -24,6 +24,7 @@ Open Pipeline Manager helps you turn shell-based workflows into visible, editabl
 - [Project Structure](#project-structure)
 - [Development](#development)
 - [Documentation](#documentation)
+- [Versioning](#versioning)
 - [License](#license)
 
 ## Features
@@ -206,6 +207,13 @@ npm run build
 
 - [Manual](MANUAL.md): full usage guide, pipeline authoring, validation, and troubleshooting.
 - [Examples](examples/): runnable YAML and JSON pipeline definitions.
+- [Git Guidelines](GITGUIDELINES.md): branch, test, changelog, release, and repository protection policy.
+- [Changelog](CHANGELOG.md): notable changes by version.
+- [Security Policy](SECURITY.md): supported versions and vulnerability reporting guidance.
+
+## Versioning
+
+The current project version is tracked in [VERSION](VERSION). User-visible releases should update `VERSION`, `CHANGELOG.md`, and package manifests such as `frontend/package.json` when applicable.
 
 ## Security
 

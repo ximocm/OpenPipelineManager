@@ -21,7 +21,6 @@ outputs/
 # Local agent/session files
 .codex/
 .agents/
-AGENTS.md
 
 # Local prompts and private notes
 Prompt.md
