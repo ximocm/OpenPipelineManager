@@ -1,0 +1,113 @@
+steps:
+  - id: create_dataset
+    name: Create demo dataset
+    description: Create a small CSV dataset for the generic example.
+    command: |
+      DEMO_DATA={demo_data} \
+      bash -c 'mkdir -p "$(dirname "$DEMO_DATA")" && printf "sample,value\nalpha,3\nbeta,7\n" > "$DEMO_DATA"'
+    working_directory: "."
+    inputs: []
+    outputs:
+      - key: demo_data
+        label: Demo CSV
+        path: "work/input/demo.csv"
+    parameters: []
+    dependencies: []
+
+  - id: normalize_dataset
+    name: Normalize dataset
+    description: Copy the dataset and record the selected normalization method.
+    command: |
+      DEMO_DATA={demo_data} \
+      NORMALIZED_DATA={normalized_data} \
+      NORMALIZATION_LOG={normalization_log} \
+      NORMALIZATION_METHOD={normalization_method} \
+      bash -c 'mkdir -p "$(dirname "$NORMALIZED_DATA")" && cp "$DEMO_DATA" "$NORMALIZED_DATA" && printf "method=%s\n" "$NORMALIZATION_METHOD" > "$NORMALIZATION_LOG"'
+    working_directory: "."
+    inputs:
+      - key: demo_data
+        label: Demo CSV
+        type: file
+        required: true
+        source_step: create_dataset
+        source_output: demo_data
+    outputs:
+      - key: normalized_data
+        label: Normalized CSV
+        path: "work/normalized/data.csv"
+      - key: normalization_log
+        label: Normalization log
+        path: "work/normalized/normalization.log"
+    parameters:
+      - key: normalization_method
+        label: Normalization method
+        type: selector
+        default: standard
+        options:
+          - standard
+          - robust
+          - none
+    dependencies:
+      - create_dataset
+
+  - id: write_report
+    name: Write report
+    description: Create a text report from the normalized dataset.
+    command: |
+      NORMALIZED_DATA={normalized_data} \
+      REPORT_FILE={report_file} \
+      REPORT_LEVEL={report_level} \
+      bash -c 'mkdir -p "$(dirname "$REPORT_FILE")" && printf "report_level=%s\nrows=%s\n" "$REPORT_LEVEL" "$(wc -l < "$NORMALIZED_DATA")" > "$REPORT_FILE"'
+    working_directory: "."
+    inputs:
+      - key: normalized_data
+        label: Normalized CSV
+        type: file
+        required: true
+        source_step: normalize_dataset
+        source_output: normalized_data
+    outputs:
+      - key: report_file
+        label: Report
+        path: "results/report.txt"
+    parameters:
+      - key: report_level
+        label: Report level
+        type: selector
+        default: summary
+        options:
+          - summary
+          - detailed
+    dependencies:
+      - normalize_dataset
+
+  - id: package_results
+    name: Package results
+    description: Create a manifest listing final outputs.
+    command: |
+      NORMALIZED_DATA={normalized_data} \
+      REPORT_FILE={report_file} \
+      RESULT_MANIFEST={result_manifest} \
+      bash -c 'mkdir -p "$(dirname "$RESULT_MANIFEST")" && printf "normalized_data=%s\nreport_file=%s\n" "$NORMALIZED_DATA" "$REPORT_FILE" > "$RESULT_MANIFEST"'
+    working_directory: "."
+    inputs:
+      - key: normalized_data
+        label: Normalized CSV
+        type: file
+        required: true
+        source_step: normalize_dataset
+        source_output: normalized_data
+      - key: report_file
+        label: Report
+        type: file
+        required: true
+        source_step: write_report
+        source_output: report_file
+    outputs:
+      - key: result_manifest
+        label: Result manifest
+        path: "results/manifest.txt"
+    parameters: []
+    dependencies:
+      - normalize_dataset
+      - write_report

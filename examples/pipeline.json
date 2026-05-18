@@ -1,0 +1,81 @@
+{
+  "steps": [
+    {
+      "id": "prepare",
+      "name": "Prepare workspace",
+      "description": "Create a small input artifact for the demo pipeline.",
+      "command": "mkdir -p outputs && printf 'alpha,beta\\n1,2\\n' > {prepared_csv}",
+      "working_directory": ".",
+      "inputs": [],
+      "outputs": [
+        {
+          "key": "prepared_csv",
+          "label": "Prepared CSV",
+          "path": "outputs/input.csv"
+        }
+      ],
+      "parameters": [],
+      "dependencies": []
+    },
+    {
+      "id": "analyze",
+      "name": "Analyze data",
+      "description": "Transform the demo input into a text report.",
+      "command": "cat {input_file} > {report_file} && echo method={method} >> {report_file}",
+      "working_directory": ".",
+      "inputs": [
+        {
+          "key": "input_file",
+          "label": "Input file",
+          "type": "file",
+          "required": true,
+          "source_step": "prepare",
+          "source_output": "prepared_csv"
+        }
+      ],
+      "outputs": [
+        {
+          "key": "report_file",
+          "label": "Analysis report",
+          "path": "outputs/report.txt"
+        }
+      ],
+      "parameters": [
+        {
+          "key": "method",
+          "label": "Method",
+          "type": "select",
+          "options": ["fast", "accurate"],
+          "default": "fast"
+        }
+      ],
+      "dependencies": ["prepare"]
+    },
+    {
+      "id": "summarize",
+      "name": "Summarize report",
+      "description": "Produce a final summary from the report.",
+      "command": "wc -l {report_file} > {summary_file}",
+      "working_directory": ".",
+      "inputs": [
+        {
+          "key": "report_file",
+          "label": "Report file",
+          "type": "file",
+          "required": true,
+          "source_step": "analyze",
+          "source_output": "report_file"
+        }
+      ],
+      "outputs": [
+        {
+          "key": "summary_file",
+          "label": "Summary file",
+          "path": "outputs/summary.txt"
+        }
+      ],
+      "parameters": [],
+      "dependencies": ["analyze"]
+    }
+  ]
+}

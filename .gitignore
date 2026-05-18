@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+
+# Frontend
+node_modules/
+dist/
+
+# Local runtime state
+.pipeline-manager/
+pipeline.project.json
+project.config.json
+outputs/
+
+# Environment files
+.env
+.env.*
+
+# Local agent/session files
+.codex/
+.agents/
+AGENTS.md
+
+# Local prompts and private notes
+Prompt.md
+prompt.md
