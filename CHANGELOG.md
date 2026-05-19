@@ -12,6 +12,16 @@ The format follows Keep a Changelog-style sections, and the project uses semanti
 - Added CI configuration for backend tests and frontend builds.
 - Added Dependabot and security reporting guidance.
 
+### Fixed
+
+- Blocked execution requests when requested steps or dependencies have blocker validation issues, and shell-quoted placeholder values before running commands.
+
+## 0.1.1 - 2026-05-18
+
+### Fixed
+
+- Added CSRF protection to execution routes to prevent cross-origin form posts from triggering local pipeline command execution.
+
 ## 0.1.0 - 2026-05-18
 
 ### Added

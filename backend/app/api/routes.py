@@ -1,16 +1,18 @@
 from __future__ import annotations
 
 import asyncio
+import hmac
+import secrets
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.models.pipeline import PipelineStep
 from app.models.state import StepRuntimeState
-from app.services.execution import ExecutionManager, sse_message
+from app.services.execution import ExecutionBlockedError, ExecutionManager, sse_message
 from app.services.project_tree import (
     build_tree,
     create_project_path,
@@ -29,6 +31,12 @@ from app.services.storage import ProjectStore
 router = APIRouter(prefix="/api")
 store = ProjectStore()
 executor = ExecutionManager(store)
+csrf_token = secrets.token_urlsafe(32)
+
+
+def require_csrf_token(x_opm_csrf_token: str | None = Header(default=None)) -> None:
+    if not x_opm_csrf_token or not hmac.compare_digest(x_opm_csrf_token, csrf_token):
+        raise HTTPException(status_code=403, detail="Invalid or missing CSRF token")
 
 
 class PathRequest(BaseModel):
@@ -88,6 +96,11 @@ class DependenciesRequest(BaseModel):
 
 class RunSelectedRequest(BaseModel):
     step_ids: list[str] | None = None
+
+
+@router.get("/security/csrf-token")
+def get_csrf_token() -> dict[str, str]:
+    return {"token": csrf_token}
 
 
 @router.post("/projects")
@@ -337,25 +350,36 @@ def update_step_selection(step_id: str, request: SelectionRequest) -> dict[str, 
     return {"state": store.state[step_id].model_dump(mode="json")}
 
 
-@router.post("/steps/{step_id}/run")
+@router.post("/steps/{step_id}/run", dependencies=[Depends(require_csrf_token)])
 def run_step(step_id: str) -> dict[str, Any]:
     try:
         return executor.run_step(step_id).model_dump(mode="json")
+    except ExecutionBlockedError as exc:
+        raise HTTPException(status_code=400, detail=execution_blocked_detail(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.post("/steps/run-selected")
-def run_selected(request: RunSelectedRequest | None = None) -> dict[str, Any]:
+@router.post("/steps/run-selected", dependencies=[Depends(require_csrf_token)])
+def run_selected(request: RunSelectedRequest) -> dict[str, Any]:
     try:
-        return executor.run_selected(request.step_ids if request else None).model_dump(mode="json")
+        return executor.run_selected(request.step_ids).model_dump(mode="json")
+    except ExecutionBlockedError as exc:
+        raise HTTPException(status_code=400, detail=execution_blocked_detail(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.post("/steps/stop")
+@router.post("/steps/stop", dependencies=[Depends(require_csrf_token)])
 def stop_execution() -> dict[str, Any]:
     return executor.stop().model_dump(mode="json")
+
+
+def execution_blocked_detail(exc: ExecutionBlockedError) -> dict[str, Any]:
+    return {
+        "message": "Execution blocked by validation issues. Resolve these blockers before running.",
+        "blockers": [issue.model_dump(mode="json") for issue in exc.blockers],
+    }
 
 
 @router.get("/logs/{step_id}")
