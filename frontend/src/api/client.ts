@@ -3,7 +3,11 @@ const API_BASE = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000';
 let csrfToken: string | undefined;
 let csrfTokenRequest: Promise<string> | undefined;
 
-async function getCsrfToken(): Promise<string> {
+async function getCsrfToken(forceRefresh = false): Promise<string> {
+  if (forceRefresh) {
+    csrfToken = undefined;
+    csrfTokenRequest = undefined;
+  }
   if (csrfToken) return csrfToken;
   if (!csrfTokenRequest) {
     csrfTokenRequest = fetch(`${API_BASE}/api/security/csrf-token`)
@@ -28,21 +32,32 @@ export async function apiRequest<T>(path: string, options: RequestInit = {}): Pr
   const headers = new Headers(options.headers);
   headers.set('Content-Type', 'application/json');
   const method = options.method ?? 'GET';
-  if (requiresCsrf(method)) {
-    headers.set('X-OPM-CSRF-Token', await getCsrfToken());
-  }
+  const sendRequest = async (refreshCsrf = false) => {
+    const requestHeaders = new Headers(headers);
+    if (requiresCsrf(method)) {
+      requestHeaders.set('X-OPM-CSRF-Token', await getCsrfToken(refreshCsrf));
+    }
+    return fetch(`${API_BASE}${path}`, {
+      ...options,
+      method,
+      headers: requestHeaders,
+    });
+  };
 
-  const response = await fetch(`${API_BASE}${path}`, {
-    ...options,
-    method,
-    headers,
-  });
+  let response = await sendRequest();
+  if (response.status === 403 && requiresCsrf(method)) {
+    response = await sendRequest(true);
+  }
   if (!response.ok) {
     const detail = await response.text();
     let message = detail || response.statusText;
     try {
       const parsed = JSON.parse(detail) as { detail?: unknown };
-      if (typeof parsed.detail === 'string') message = parsed.detail;
+      if (typeof parsed.detail === 'string') {
+        message = parsed.detail;
+      } else if (isRecord(parsed.detail)) {
+        message = formatErrorDetail(parsed.detail);
+      }
     } catch {
       // Keep the raw response text when the backend did not return JSON.
     }
@@ -53,4 +68,23 @@ export async function apiRequest<T>(path: string, options: RequestInit = {}): Pr
 
 export function apiUrl(path: string): string {
   return `${API_BASE}${path}`;
+}
+
+function formatErrorDetail(detail: Record<string, unknown>): string {
+  const message = typeof detail.message === 'string' ? detail.message : 'Request failed';
+  const blockers = Array.isArray(detail.blockers) ? detail.blockers.map(formatBlocker).filter(Boolean) : [];
+  return blockers.length ? `${message} ${blockers.join('; ')}` : message;
+}
+
+function formatBlocker(value: unknown): string {
+  if (!isRecord(value)) return '';
+  const stepId = typeof value.step_id === 'string' ? value.step_id : 'pipeline';
+  const field = typeof value.field === 'string' ? value.field : '';
+  const message = typeof value.message === 'string' ? value.message : '';
+  const location = field ? `${stepId}.${field}` : stepId;
+  return message ? `${location}: ${message}` : location;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
