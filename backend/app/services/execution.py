@@ -9,10 +9,21 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from app.models.pipeline import PipelineStep
+from app.models.pipeline import PipelineStep, ValidationIssue
 from app.models.state import ExecutionStatus, StepRuntimeState
 from app.services.storage import ProjectStore
 from app.services.validation import PLACEHOLDER_RE, effective_step_values, has_value
+
+
+class ExecutionBlockedError(RuntimeError):
+    def __init__(self, blockers: list[ValidationIssue]) -> None:
+        self.blockers = blockers
+        summary = "; ".join(format_validation_issue(issue) for issue in blockers)
+        plural = "" if len(blockers) == 1 else "s"
+        message = f"Execution blocked by {len(blockers)} validation blocker{plural}"
+        if summary:
+            message = f"{message}: {summary}"
+        super().__init__(message)
 
 
 class ExecutionManager:
@@ -34,7 +45,7 @@ class ExecutionManager:
 
         command = step.command
         for key in placeholders:
-            command = command.replace("{" + key + "}", str(values[key]))
+            command = command.replace("{" + key + "}", shlex.quote(str(values[key])))
         return self._apply_environment(step.environment, command)
 
     def _apply_environment(self, environment: str, command: str) -> str:
@@ -78,6 +89,7 @@ class ExecutionManager:
         with self.lock:
             if self.status().running:
                 raise RuntimeError("Execution is already running")
+            self._raise_for_validation_blockers(step_ids)
             ordered = self._topological_subset(step_ids)
             self.stop_requested = False
             self.thread = threading.Thread(target=self._run_ordered_steps, args=(ordered,), daemon=True)
@@ -121,6 +133,36 @@ class ExecutionManager:
         for step_id in step_ids:
             visit(step_id)
         return ordered
+
+    def _raise_for_validation_blockers(self, step_ids: list[str]) -> None:
+        issues = self.store.validate()
+        relevant_step_ids = self._dependency_closure(step_ids)
+        blockers = [
+            issue
+            for issue in issues
+            if issue.severity == "blocker" and (issue.step_id is None or issue.step_id in relevant_step_ids)
+        ]
+        if blockers:
+            raise ExecutionBlockedError(blockers)
+
+    def _dependency_closure(self, step_ids: list[str]) -> set[str]:
+        pipeline = self.store.get_pipeline()
+        step_map = pipeline.step_by_id()
+        seen: set[str] = set()
+
+        def visit(step_id: str) -> None:
+            if step_id in seen:
+                return
+            seen.add(step_id)
+            step = step_map.get(step_id)
+            if step is None:
+                return
+            for dependency in step.dependencies:
+                visit(dependency)
+
+        for step_id in step_ids:
+            visit(step_id)
+        return seen
 
     def _run_ordered_steps(self, step_ids: list[str]) -> None:
         try:
@@ -200,6 +242,13 @@ class ExecutionManager:
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def format_validation_issue(issue: ValidationIssue) -> str:
+    location = issue.step_id or "pipeline"
+    if issue.field:
+        location = f"{location}.{issue.field}"
+    return f"{location}: {issue.message}"
 
 
 def sse_message(event: dict[str, Any]) -> str:

@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 
 from app.models.pipeline import PipelineStep
 from app.models.state import StepRuntimeState
-from app.services.execution import ExecutionManager, sse_message
+from app.services.execution import ExecutionBlockedError, ExecutionManager, sse_message
 from app.services.project_tree import (
     build_tree,
     create_project_path,
@@ -354,6 +354,8 @@ def update_step_selection(step_id: str, request: SelectionRequest) -> dict[str, 
 def run_step(step_id: str) -> dict[str, Any]:
     try:
         return executor.run_step(step_id).model_dump(mode="json")
+    except ExecutionBlockedError as exc:
+        raise HTTPException(status_code=400, detail=execution_blocked_detail(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -362,6 +364,8 @@ def run_step(step_id: str) -> dict[str, Any]:
 def run_selected(request: RunSelectedRequest) -> dict[str, Any]:
     try:
         return executor.run_selected(request.step_ids).model_dump(mode="json")
+    except ExecutionBlockedError as exc:
+        raise HTTPException(status_code=400, detail=execution_blocked_detail(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -369,6 +373,13 @@ def run_selected(request: RunSelectedRequest) -> dict[str, Any]:
 @router.post("/steps/stop", dependencies=[Depends(require_csrf_token)])
 def stop_execution() -> dict[str, Any]:
     return executor.stop().model_dump(mode="json")
+
+
+def execution_blocked_detail(exc: ExecutionBlockedError) -> dict[str, Any]:
+    return {
+        "message": "Execution blocked by validation issues. Resolve these blockers before running.",
+        "blockers": [issue.model_dump(mode="json") for issue in exc.blockers],
+    }
 
 
 @router.get("/logs/{step_id}")

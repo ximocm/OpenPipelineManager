@@ -42,7 +42,11 @@ export async function apiRequest<T>(path: string, options: RequestInit = {}): Pr
     let message = detail || response.statusText;
     try {
       const parsed = JSON.parse(detail) as { detail?: unknown };
-      if (typeof parsed.detail === 'string') message = parsed.detail;
+      if (typeof parsed.detail === 'string') {
+        message = parsed.detail;
+      } else if (isRecord(parsed.detail)) {
+        message = formatErrorDetail(parsed.detail);
+      }
     } catch {
       // Keep the raw response text when the backend did not return JSON.
     }
@@ -53,4 +57,23 @@ export async function apiRequest<T>(path: string, options: RequestInit = {}): Pr
 
 export function apiUrl(path: string): string {
   return `${API_BASE}${path}`;
+}
+
+function formatErrorDetail(detail: Record<string, unknown>): string {
+  const message = typeof detail.message === 'string' ? detail.message : 'Request failed';
+  const blockers = Array.isArray(detail.blockers) ? detail.blockers.map(formatBlocker).filter(Boolean) : [];
+  return blockers.length ? `${message} ${blockers.join('; ')}` : message;
+}
+
+function formatBlocker(value: unknown): string {
+  if (!isRecord(value)) return '';
+  const stepId = typeof value.step_id === 'string' ? value.step_id : 'pipeline';
+  const field = typeof value.field === 'string' ? value.field : '';
+  const message = typeof value.message === 'string' ? value.message : '';
+  const location = field ? `${stepId}.${field}` : stepId;
+  return message ? `${location}: ${message}` : location;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
