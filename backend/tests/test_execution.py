@@ -104,6 +104,36 @@ def test_build_command_quotes_placeholder_values_with_shell_metacharacters(tmp_p
     assert command == "tool --input 'Input/sample file.txt; touch injected'"
 
 
+def test_build_command_preserves_already_quoted_placeholder_boundaries(tmp_path):
+    store = ProjectStore()
+    store.create_project(tmp_path)
+    store.pipeline_config = PipelineConfig.model_validate(
+        {
+            "steps": [
+                {
+                    "id": "a",
+                    "name": "A",
+                    "command": 'tool --input "{input_file}" --label \'{sample_label}\'',
+                    "inputs": [{"key": "input_file", "type": "file", "default": "Input/sample file.txt; touch injected"}],
+                    "parameters": [{"key": "sample_label", "type": "text", "default": "alpha's sample"}],
+                }
+            ]
+        }
+    )
+    step = store.get_step("a")
+
+    command = ExecutionManager(store).build_command(step)
+
+    assert command == 'tool --input "Input/sample file.txt; touch injected" --label \'alpha\'\\\'\'s sample\''
+    assert shlex.split(command) == [
+        "tool",
+        "--input",
+        "Input/sample file.txt; touch injected",
+        "--label",
+        "alpha's sample",
+    ]
+
+
 def test_build_command_keeps_multiline_commands(tmp_path):
     store = ProjectStore()
     store.create_project(tmp_path)
@@ -154,6 +184,36 @@ def test_placeholder_value_executes_as_one_shell_argument(tmp_path):
 
     assert store.state["a"].status == "ok"
     assert ast.literal_eval((tmp_path / "argv.txt").read_text(encoding="utf-8")) == [input_value]
+    assert not (tmp_path / "injected").exists()
+
+
+def test_quoted_placeholder_value_executes_as_one_shell_argument(tmp_path):
+    store = ProjectStore()
+    store.create_project(tmp_path)
+    input_value = "Input/sample $HOME file.txt; touch injected"
+    (tmp_path / "Input").mkdir(exist_ok=True)
+    (tmp_path / input_value).write_text("ok", encoding="utf-8")
+    script = "import pathlib, sys; pathlib.Path('quoted-argv.txt').write_text(repr(sys.argv[1:]), encoding='utf-8')"
+    store.pipeline_config = PipelineConfig.model_validate(
+        {
+            "steps": [
+                {
+                    "id": "a",
+                    "name": "A",
+                    "command": f'{shlex.quote(sys.executable)} -c {shlex.quote(script)} "{{input_file}}"',
+                    "inputs": [{"key": "input_file", "type": "file", "required": True, "default": input_value}],
+                }
+            ]
+        }
+    )
+    manager = ExecutionManager(store)
+
+    manager.run_step("a")
+    assert manager.thread is not None
+    manager.thread.join(timeout=5)
+
+    assert store.state["a"].status == "ok"
+    assert ast.literal_eval((tmp_path / "quoted-argv.txt").read_text(encoding="utf-8")) == [input_value]
     assert not (tmp_path / "injected").exists()
 
 

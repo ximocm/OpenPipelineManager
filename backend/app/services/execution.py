@@ -43,9 +43,7 @@ class ExecutionManager:
         if missing:
             raise ValueError(f"Missing placeholder values: {', '.join(missing)}")
 
-        command = step.command
-        for key in placeholders:
-            command = command.replace("{" + key + "}", shlex.quote(str(values[key])))
+        command = _substitute_placeholders(step.command, values)
         return self._apply_environment(step.environment, command)
 
     def _apply_environment(self, environment: str, command: str) -> str:
@@ -242,6 +240,52 @@ class ExecutionManager:
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _substitute_placeholders(command: str, values: dict[str, Any]) -> str:
+    parts: list[str] = []
+    quote_context = "unquoted"
+    index = 0
+    while index < len(command):
+        match = PLACEHOLDER_RE.match(command, index)
+        if match:
+            parts.append(_quote_placeholder_value(str(values[match.group(1)]), quote_context))
+            index = match.end()
+            continue
+
+        char = command[index]
+        next_char = command[index + 1] if index + 1 < len(command) else ""
+        if quote_context == "unquoted":
+            if char == "'":
+                quote_context = "single"
+            elif char == '"':
+                quote_context = "double"
+            elif char == "\\" and next_char:
+                parts.append(command[index : index + 2])
+                index += 2
+                continue
+        elif quote_context == "single":
+            if char == "'":
+                quote_context = "unquoted"
+        elif quote_context == "double":
+            if char == "\\" and next_char:
+                parts.append(command[index : index + 2])
+                index += 2
+                continue
+            if char == '"':
+                quote_context = "unquoted"
+
+        parts.append(char)
+        index += 1
+    return "".join(parts)
+
+
+def _quote_placeholder_value(value: str, quote_context: str) -> str:
+    if quote_context == "single":
+        return value.replace("'", "'\\''")
+    if quote_context == "double":
+        return "".join(f"\\{char}" if char in {'$', '`', '"', "\\"} else char for char in value)
+    return shlex.quote(value)
 
 
 def format_validation_issue(issue: ValidationIssue) -> str:

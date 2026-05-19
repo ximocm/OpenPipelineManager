@@ -3,7 +3,11 @@ const API_BASE = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000';
 let csrfToken: string | undefined;
 let csrfTokenRequest: Promise<string> | undefined;
 
-async function getCsrfToken(): Promise<string> {
+async function getCsrfToken(forceRefresh = false): Promise<string> {
+  if (forceRefresh) {
+    csrfToken = undefined;
+    csrfTokenRequest = undefined;
+  }
   if (csrfToken) return csrfToken;
   if (!csrfTokenRequest) {
     csrfTokenRequest = fetch(`${API_BASE}/api/security/csrf-token`)
@@ -28,15 +32,22 @@ export async function apiRequest<T>(path: string, options: RequestInit = {}): Pr
   const headers = new Headers(options.headers);
   headers.set('Content-Type', 'application/json');
   const method = options.method ?? 'GET';
-  if (requiresCsrf(method)) {
-    headers.set('X-OPM-CSRF-Token', await getCsrfToken());
-  }
+  const sendRequest = async (refreshCsrf = false) => {
+    const requestHeaders = new Headers(headers);
+    if (requiresCsrf(method)) {
+      requestHeaders.set('X-OPM-CSRF-Token', await getCsrfToken(refreshCsrf));
+    }
+    return fetch(`${API_BASE}${path}`, {
+      ...options,
+      method,
+      headers: requestHeaders,
+    });
+  };
 
-  const response = await fetch(`${API_BASE}${path}`, {
-    ...options,
-    method,
-    headers,
-  });
+  let response = await sendRequest();
+  if (response.status === 403 && requiresCsrf(method)) {
+    response = await sendRequest(true);
+  }
   if (!response.ok) {
     const detail = await response.text();
     let message = detail || response.statusText;
