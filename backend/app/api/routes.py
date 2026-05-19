@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import hmac
+import secrets
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -29,6 +31,12 @@ from app.services.storage import ProjectStore
 router = APIRouter(prefix="/api")
 store = ProjectStore()
 executor = ExecutionManager(store)
+csrf_token = secrets.token_urlsafe(32)
+
+
+def require_csrf_token(x_opm_csrf_token: str | None = Header(default=None)) -> None:
+    if not x_opm_csrf_token or not hmac.compare_digest(x_opm_csrf_token, csrf_token):
+        raise HTTPException(status_code=403, detail="Invalid or missing CSRF token")
 
 
 class PathRequest(BaseModel):
@@ -88,6 +96,11 @@ class DependenciesRequest(BaseModel):
 
 class RunSelectedRequest(BaseModel):
     step_ids: list[str] | None = None
+
+
+@router.get("/security/csrf-token")
+def get_csrf_token() -> dict[str, str]:
+    return {"token": csrf_token}
 
 
 @router.post("/projects")
@@ -337,7 +350,7 @@ def update_step_selection(step_id: str, request: SelectionRequest) -> dict[str, 
     return {"state": store.state[step_id].model_dump(mode="json")}
 
 
-@router.post("/steps/{step_id}/run")
+@router.post("/steps/{step_id}/run", dependencies=[Depends(require_csrf_token)])
 def run_step(step_id: str) -> dict[str, Any]:
     try:
         return executor.run_step(step_id).model_dump(mode="json")
@@ -345,15 +358,15 @@ def run_step(step_id: str) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.post("/steps/run-selected")
-def run_selected(request: RunSelectedRequest | None = None) -> dict[str, Any]:
+@router.post("/steps/run-selected", dependencies=[Depends(require_csrf_token)])
+def run_selected(request: RunSelectedRequest) -> dict[str, Any]:
     try:
-        return executor.run_selected(request.step_ids if request else None).model_dump(mode="json")
+        return executor.run_selected(request.step_ids).model_dump(mode="json")
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.post("/steps/stop")
+@router.post("/steps/stop", dependencies=[Depends(require_csrf_token)])
 def stop_execution() -> dict[str, Any]:
     return executor.stop().model_dump(mode="json")
 
