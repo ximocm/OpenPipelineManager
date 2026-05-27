@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import json
-import posixpath
 from pathlib import Path
 from typing import Any
 
 from app.models.pipeline import PipelineConfig, PipelineStep, ValidationIssue
 from app.models.state import ProjectSnapshot, StepRuntimeState
+from app.services.pipeline_paths import PipelinePathError, relative_project_path, resolve_pipeline_path
 from app.services.pipeline_parser import parse_pipeline_file
 from app.services.project_tree import ensure_project_scaffold, ensure_step_folders, safe_segment, validate_project_folder
 from app.services.validation import ValidationService
@@ -189,8 +189,15 @@ class ProjectStore:
 
     def is_step_ok(self, step: PipelineStep) -> bool:
         done_marker = self.done_dir() / f"{step.id}.done"
-        working_directory = self.current_project() / step.working_directory
-        outputs_exist = all((working_directory / output.path).exists() for output in step.outputs)
+        try:
+            working_directory = resolve_pipeline_path(self.current_project(), step.working_directory)
+            output_paths = [
+                resolve_pipeline_path(self.current_project(), output.path, base=working_directory)
+                for output in step.outputs
+            ]
+        except PipelinePathError:
+            return False
+        outputs_exist = all(output_path.exists() for output_path in output_paths)
         return done_marker.exists() and outputs_exist
 
     def validate(self) -> list[ValidationIssue]:
@@ -369,15 +376,3 @@ class ProjectStore:
         self._ensure_manager_dirs()
         path = self.manager_dir() / name
         path.write_text(json.dumps(data, indent=2), encoding="utf-8")
-
-
-def relative_project_path(target_working_directory: str, source_working_directory: str, source_output_path: str) -> str:
-    target = normalize_project_path(target_working_directory)
-    source = normalize_project_path(posixpath.join(source_working_directory or ".", source_output_path))
-    relative = posixpath.relpath(source, start=target)
-    return "." if relative == "." else relative
-
-
-def normalize_project_path(path: str) -> str:
-    normalized = posixpath.normpath((path or ".").replace("\\", "/"))
-    return "." if normalized in {"", "."} else normalized

@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import re
-import posixpath
 from collections import Counter
 from pathlib import Path
 from typing import Any, Callable
 
 from app.models.pipeline import PipelineConfig, PipelineStep, ValidationIssue, ValueSpec
+from app.services.pipeline_paths import PipelinePathError, relative_project_path, resolve_pipeline_path
 
 
 PLACEHOLDER_RE = re.compile(r"{([A-Za-z_][A-Za-z0-9_-]*)}")
@@ -161,9 +161,20 @@ class ValidationService:
     ) -> list[ValidationIssue]:
         issues: list[ValidationIssue] = []
         values = effective_step_values(step, params)
-        working_directory = project_path / step.working_directory
+        try:
+            working_directory = resolve_pipeline_path(project_path, step.working_directory)
+        except PipelinePathError as exc:
+            working_directory = None
+            issues.append(
+                ValidationIssue(
+                    severity="blocker",
+                    step_id=step.id,
+                    field="working_directory",
+                    message=f"Unsafe working directory: {exc}",
+                )
+            )
 
-        if not working_directory.exists():
+        if working_directory is not None and not working_directory.exists():
             issues.append(
                 ValidationIssue(
                     severity="blocker",
@@ -173,13 +184,26 @@ class ValidationService:
                 )
             )
 
+        step_base = working_directory or project_path.resolve()
+
         for spec in step.inputs:
             value = values.get(spec.key)
             if spec.type in {"file", "folder"}:
                 if has_value(value):
+                    try:
+                        candidate = resolve_pipeline_path(project_path, str(value), base=step_base)
+                    except PipelinePathError as exc:
+                        issues.append(
+                            ValidationIssue(
+                                severity="blocker",
+                                step_id=step.id,
+                                field=spec.key,
+                                message=f"Unsafe input path: {exc}",
+                            )
+                        )
+                        continue
                     if spec.source_step and spec.source_output:
                         continue
-                    candidate = working_directory / str(value)
                     exists = candidate.exists()
                     expected_dir = spec.type == "folder"
                     type_matches = candidate.is_dir() if expected_dir else candidate.is_file()
@@ -210,6 +234,19 @@ class ValidationService:
                             message=f"Optional input is not set: {spec.label or spec.key}",
                         )
                     )
+
+        for output in step.outputs:
+            try:
+                resolve_pipeline_path(project_path, output.path, base=step_base)
+            except PipelinePathError as exc:
+                issues.append(
+                    ValidationIssue(
+                        severity="blocker",
+                        step_id=step.id,
+                        field=output.key or "outputs",
+                        message=f"Unsafe output path: {exc}",
+                    )
+                )
 
         for spec in step.parameters:
             issues.extend(self._validate_value_spec(step.id, spec, values.get(spec.key)))
@@ -348,15 +385,3 @@ class ValidationService:
             visit(step.id, [])
 
         return issues
-
-
-def relative_project_path(target_working_directory: str, source_working_directory: str, source_output_path: str) -> str:
-    target = normalize_project_path(target_working_directory)
-    source = normalize_project_path(posixpath.join(source_working_directory or ".", source_output_path))
-    relative = posixpath.relpath(source, start=target)
-    return "." if relative == "." else relative
-
-
-def normalize_project_path(path: str) -> str:
-    normalized = posixpath.normpath((path or ".").replace("\\", "/"))
-    return "." if normalized in {"", "."} else normalized

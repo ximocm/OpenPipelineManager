@@ -5,7 +5,7 @@ import shlex
 import sys
 
 from app.models.pipeline import PipelineConfig
-from app.services.execution import ExecutionManager
+from app.services.execution import ExecutionBlockedError, ExecutionManager
 from app.services.storage import ProjectStore
 
 
@@ -260,6 +260,56 @@ def test_step_ok_requires_done_marker_and_outputs(tmp_path):
     assert store.is_step_ok(step) is False
     (tmp_path / "out.txt").write_text("ok", encoding="utf-8")
     assert store.is_step_ok(step) is True
+
+
+def test_step_ok_ignores_unsafe_outside_project_outputs(tmp_path):
+    outside_file = tmp_path.parent / f"{tmp_path.name}-outside-output.txt"
+    outside_file.write_text("ok", encoding="utf-8")
+    store = ProjectStore()
+    store.create_project(tmp_path)
+    store.pipeline_config = PipelineConfig.model_validate(
+        {
+            "steps": [
+                {"id": "a", "name": "A", "outputs": [{"path": f"../{outside_file.name}"}]},
+            ]
+        }
+    )
+    step = store.get_step("a")
+
+    store.done_path("a").write_text("done", encoding="utf-8")
+
+    assert store.is_step_ok(step) is False
+
+
+def test_execution_blocks_unsafe_working_directory_before_starting_process(tmp_path):
+    outside_dir = tmp_path.parent / f"{tmp_path.name}-outside-work"
+    outside_dir.mkdir()
+    marker = outside_dir / "ran.txt"
+    store = ProjectStore()
+    store.create_project(tmp_path)
+    store.pipeline_config = PipelineConfig.model_validate(
+        {
+            "steps": [
+                {
+                    "id": "a",
+                    "name": "A",
+                    "working_directory": f"../{outside_dir.name}",
+                    "command": "printf ran > ran.txt",
+                }
+            ]
+        }
+    )
+    manager = ExecutionManager(store)
+
+    try:
+        manager.run_step("a")
+    except ExecutionBlockedError as exc:
+        assert any(issue.field == "working_directory" for issue in exc.blockers)
+    else:
+        raise AssertionError("Expected unsafe working directory to block execution")
+
+    assert manager.thread is None
+    assert not marker.exists()
 
 
 def test_execution_order_respects_dependencies(tmp_path):

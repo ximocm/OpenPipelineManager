@@ -19,6 +19,7 @@ The format follows Keep a Changelog-style sections, and the project uses semanti
 ### Fixed
 
 - Blocked execution requests when requested steps or dependencies have blocker validation issues, and shell-quoted placeholder values before running commands.
+- Blocked unsafe pipeline working directories, inputs, and outputs from resolving outside the opened project.
 
 ## 0.1.1 - 2026-05-18
 
