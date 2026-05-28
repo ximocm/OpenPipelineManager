@@ -250,7 +250,8 @@ def preview_file(root: Path, requested_path: str) -> FilePreview:
 
     raw = candidate.read_bytes()
     if is_text_bytes(raw):
-        return FilePreview(path=requested_path, type="text", content=raw.decode("utf-8", errors="replace"))
+        content = raw.decode("utf-8", errors="replace").replace("\r\n", "\n")
+        return FilePreview(path=requested_path, type="text", content=content)
     return FilePreview(path=requested_path, type="binary")
 
 
