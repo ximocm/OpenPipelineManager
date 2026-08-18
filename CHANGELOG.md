@@ -6,6 +6,10 @@ The format follows Keep a Changelog-style sections, and the project uses semanti
 
 ## Unreleased
 
+### Changed
+
+- Updated backend, frontend, and GitHub Actions dependencies to their latest compatible releases.
+
 ### Added
 
 - Added repository governance documentation for tests, branching, release notes, and public security defaults.
