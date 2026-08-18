@@ -9,6 +9,7 @@ This repository is public, so the default workflow should favor reviewable chang
 - Feature and fix branches should branch from `dev` and use descriptive names such as `feat/pipeline-editor`, `fix/parser-cycle-check`, or `docs/release-process`.
 - Normal flow: feature branch -> pull request into `dev` -> release pull request from `dev` into `main`.
 - Hotfixes may branch from `main`, but they still need a pull request, passing checks, and a follow-up merge back into `dev`.
+- The `Sync main back to dev` workflow opens a `main` -> `dev` sync pull request after `main` or `dev` changes when `dev` does not contain the latest `main` history. Merge these sync PRs with **Create a merge commit**; squash or rebase merges do not preserve the `main` history in `dev`. Configure the repository secret `OPM_AUTOMATION_TOKEN` with a fine-grained PAT that has `contents` read/write and `pull requests` read/write permissions if generated sync PRs should trigger the normal PR CI checks automatically.
 
 ## Required Checks
 
