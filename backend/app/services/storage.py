@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import json
-import posixpath
 from pathlib import Path
 from typing import Any
 
 from app.models.pipeline import PipelineConfig, PipelineStep, ValidationIssue
 from app.models.state import ProjectSnapshot, StepRuntimeState
+from app.services.pipeline_paths import PipelinePathError, relative_project_path, resolve_pipeline_path
 from app.services.pipeline_parser import parse_pipeline_file
 from app.services.project_tree import ensure_project_scaffold, ensure_step_folders, safe_segment, validate_project_folder
 from app.services.validation import ValidationService
@@ -89,7 +89,7 @@ class ProjectStore:
         self._resolve_input_sources()
         normalized_step = self.pipeline_config.steps[-1]
         ensure_step_folders(self.current_project(), [normalized_step.id])
-        self.params[normalized_step.id] = normalized_step.default_values()
+        self.params[normalized_step.id] = self._runtime_params(normalized_step)
         self.state[normalized_step.id] = StepRuntimeState()
         self.visual_layout[normalized_step.id] = self._default_step_position(len(self.pipeline_config.steps) - 1)
         self.validate()
@@ -114,9 +114,9 @@ class ProjectStore:
         if new_step_id != step_id:
             for item in pipeline.steps:
                 item.dependencies = [new_step_id if dependency == step_id else dependency for dependency in item.dependencies]
-            renamed_params = normalized_step.default_values()
-            renamed_params.update(self.params.pop(step_id, {}))
-            self.params[new_step_id] = renamed_params
+            existing_params = self.params.pop(step_id, {})
+            existing_params.update(self.params.pop(new_step_id, {}))
+            self.params[new_step_id] = self._runtime_params(normalized_step, existing_params)
             self.state[new_step_id] = self.state.pop(step_id, StepRuntimeState())
             self.visual_layout[new_step_id] = self.visual_layout.pop(step_id, self._default_step_position(current_index))
             if self.current_path is not None:
@@ -129,9 +129,10 @@ class ProjectStore:
                 if old_done.exists() and not new_done.exists():
                     old_done.rename(new_done)
         else:
-            updated_params = normalized_step.default_values()
-            updated_params.update(self.params.get(new_step_id, {}))
-            self.params[new_step_id] = updated_params
+            self.params[new_step_id] = self._runtime_params(
+                normalized_step,
+                self.params.get(new_step_id, {}),
+            )
             self.state.setdefault(new_step_id, StepRuntimeState())
             self.visual_layout.setdefault(new_step_id, self._default_step_position(current_index))
 
@@ -167,8 +168,10 @@ class ProjectStore:
         raise KeyError(f"Unknown step: {step_id}")
 
     def update_step_params(self, step_id: str, values: dict[str, Any]) -> None:
-        self.get_step(step_id)
-        self.params.setdefault(step_id, {}).update(values)
+        step = self.get_step(step_id)
+        updated_params = dict(self.params.get(step_id, {}))
+        updated_params.update(values)
+        self.params[step_id] = self._runtime_params(step, updated_params)
         self.validate()
         self.save_all()
 
@@ -189,8 +192,15 @@ class ProjectStore:
 
     def is_step_ok(self, step: PipelineStep) -> bool:
         done_marker = self.done_dir() / f"{step.id}.done"
-        working_directory = self.current_project() / step.working_directory
-        outputs_exist = all((working_directory / output.path).exists() for output in step.outputs)
+        try:
+            working_directory = resolve_pipeline_path(self.current_project(), step.working_directory)
+            output_paths = [
+                resolve_pipeline_path(self.current_project(), output.path, base=working_directory)
+                for output in step.outputs
+            ]
+        except PipelinePathError:
+            return False
+        outputs_exist = all(output_path.exists() for output_path in output_paths)
         return done_marker.exists() and outputs_exist
 
     def validate(self) -> list[ValidationIssue]:
@@ -251,9 +261,7 @@ class ProjectStore:
         if self.pipeline_config is None:
             return
         for step in self.pipeline_config.steps:
-            defaults = step.default_values()
-            defaults.update(self.params.get(step.id, {}))
-            self.params[step.id] = defaults
+            self.params[step.id] = self._runtime_params(step, self.params.get(step.id, {}))
             self.state.setdefault(step.id, StepRuntimeState())
             if self.is_step_ok(step):
                 self.state[step.id].status = "ok"
@@ -290,7 +298,7 @@ class ProjectStore:
         return safe_segment(requested_step_id)
 
     def _normalized_step(self, step: PipelineStep, step_id: str, dependencies: list[str]) -> PipelineStep:
-        working_directory = step.working_directory.strip() if step.working_directory else f"steps/{step_id}/work"
+        working_directory = step.working_directory if step.working_directory != "" else f"steps/{step_id}/work"
         return step.model_copy(
             update={
                 "id": step_id,
@@ -300,6 +308,17 @@ class ProjectStore:
                 "dependencies": list(dict.fromkeys(dependencies)),
             }
         )
+
+    def _runtime_params(
+        self,
+        step: PipelineStep,
+        existing: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        allowed_keys = {item.key for item in [*step.inputs, *step.parameters]}
+        values = step.default_values()
+        if existing:
+            values.update({key: value for key, value in existing.items() if key in allowed_keys})
+        return values
 
     def _resolve_input_sources(self) -> None:
         if self.pipeline_config is None:
@@ -327,12 +346,18 @@ class ProjectStore:
                 if source_output is None:
                     continue
 
-                input_spec.default = relative_project_path(
-                    step.working_directory,
-                    source_step.working_directory,
-                    source_output.path,
-                )
-                self.params.setdefault(step.id, {})[input_spec.key] = input_spec.default
+                try:
+                    source_value = relative_project_path(
+                        self.current_project(),
+                        step.working_directory,
+                        source_step.working_directory,
+                        source_output.path,
+                    )
+                except PipelinePathError:
+                    source_value = None
+                if source_value is not None:
+                    input_spec.default = source_value
+                    self.params.setdefault(step.id, {})[input_spec.key] = source_value
                 if source_step.id not in dependencies:
                     dependencies.append(source_step.id)
 
@@ -369,15 +394,3 @@ class ProjectStore:
         self._ensure_manager_dirs()
         path = self.manager_dir() / name
         path.write_text(json.dumps(data, indent=2), encoding="utf-8")
-
-
-def relative_project_path(target_working_directory: str, source_working_directory: str, source_output_path: str) -> str:
-    target = normalize_project_path(target_working_directory)
-    source = normalize_project_path(posixpath.join(source_working_directory or ".", source_output_path))
-    relative = posixpath.relpath(source, start=target)
-    return "." if relative == "." else relative
-
-
-def normalize_project_path(path: str) -> str:
-    normalized = posixpath.normpath((path or ".").replace("\\", "/"))
-    return "." if normalized in {"", "."} else normalized

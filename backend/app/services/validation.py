@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import re
-import posixpath
 from collections import Counter
 from pathlib import Path
 from typing import Any, Callable
 
 from app.models.pipeline import PipelineConfig, PipelineStep, ValidationIssue, ValueSpec
+from app.services.pipeline_paths import PipelinePathError, relative_project_path, resolve_pipeline_path
 
 
 PLACEHOLDER_RE = re.compile(r"{([A-Za-z_][A-Za-z0-9_-]*)}")
@@ -20,6 +20,7 @@ def effective_step_values(step: PipelineStep, params: dict[str, Any] | None = No
     values = step.default_values()
     if params:
         values.update(params)
+    values.update(step.output_values())
     return values
 
 
@@ -52,7 +53,8 @@ class ValidationService:
 
         for step in pipeline.steps:
             issues.extend(self._validate_source_refs(step, step_map))
-            step_params = self._source_input_values(pipeline, step)
+            step_params, source_path_issues = self._source_input_values(pipeline, step, project_path)
+            issues.extend(source_path_issues)
             step_params.update(params.get(step.id, {}))
             issues.extend(self.validate_step(step, project_path, step_params))
 
@@ -122,8 +124,14 @@ class ValidationService:
                 )
         return issues
 
-    def _source_input_values(self, pipeline: PipelineConfig, step: PipelineStep) -> dict[str, str]:
+    def _source_input_values(
+        self,
+        pipeline: PipelineConfig,
+        step: PipelineStep,
+        project_path: Path,
+    ) -> tuple[dict[str, str], list[ValidationIssue]]:
         values: dict[str, str] = {}
+        issues: list[ValidationIssue] = []
         step_map = pipeline.step_by_id()
 
         for input_spec in step.inputs:
@@ -145,13 +153,25 @@ class ValidationService:
             if source_output is None:
                 continue
 
-            values[input_spec.key] = relative_project_path(
-                step.working_directory,
-                source_step.working_directory,
-                source_output.path,
-            )
+            try:
+                values[input_spec.key] = relative_project_path(
+                    project_path,
+                    step.working_directory,
+                    source_step.working_directory,
+                    source_output.path,
+                )
+            except PipelinePathError as exc:
+                issues.append(
+                    ValidationIssue(
+                        severity="blocker",
+                        step_id=step.id,
+                        field=input_spec.key,
+                        message=f"Unsafe input source path: {exc}",
+                    )
+                )
+                continue
 
-        return values
+        return values, issues
 
     def validate_step(
         self,
@@ -161,9 +181,20 @@ class ValidationService:
     ) -> list[ValidationIssue]:
         issues: list[ValidationIssue] = []
         values = effective_step_values(step, params)
-        working_directory = project_path / step.working_directory
+        try:
+            working_directory = resolve_pipeline_path(project_path, step.working_directory)
+        except PipelinePathError as exc:
+            working_directory = None
+            issues.append(
+                ValidationIssue(
+                    severity="blocker",
+                    step_id=step.id,
+                    field="working_directory",
+                    message=f"Unsafe working directory: {exc}",
+                )
+            )
 
-        if not working_directory.exists():
+        if working_directory is not None and not working_directory.exists():
             issues.append(
                 ValidationIssue(
                     severity="blocker",
@@ -173,13 +204,26 @@ class ValidationService:
                 )
             )
 
+        step_base = working_directory or project_path.resolve()
+
         for spec in step.inputs:
             value = values.get(spec.key)
             if spec.type in {"file", "folder"}:
                 if has_value(value):
+                    try:
+                        candidate = resolve_pipeline_path(project_path, str(value), base=step_base)
+                    except PipelinePathError as exc:
+                        issues.append(
+                            ValidationIssue(
+                                severity="blocker",
+                                step_id=step.id,
+                                field=spec.key,
+                                message=f"Unsafe input path: {exc}",
+                            )
+                        )
+                        continue
                     if spec.source_step and spec.source_output:
                         continue
-                    candidate = working_directory / str(value)
                     exists = candidate.exists()
                     expected_dir = spec.type == "folder"
                     type_matches = candidate.is_dir() if expected_dir else candidate.is_file()
@@ -210,6 +254,19 @@ class ValidationService:
                             message=f"Optional input is not set: {spec.label or spec.key}",
                         )
                     )
+
+        for output in step.outputs:
+            try:
+                resolve_pipeline_path(project_path, output.path, base=step_base)
+            except PipelinePathError as exc:
+                issues.append(
+                    ValidationIssue(
+                        severity="blocker",
+                        step_id=step.id,
+                        field=output.key or "outputs",
+                        message=f"Unsafe output path: {exc}",
+                    )
+                )
 
         for spec in step.parameters:
             issues.extend(self._validate_value_spec(step.id, spec, values.get(spec.key)))
@@ -348,15 +405,3 @@ class ValidationService:
             visit(step.id, [])
 
         return issues
-
-
-def relative_project_path(target_working_directory: str, source_working_directory: str, source_output_path: str) -> str:
-    target = normalize_project_path(target_working_directory)
-    source = normalize_project_path(posixpath.join(source_working_directory or ".", source_output_path))
-    relative = posixpath.relpath(source, start=target)
-    return "." if relative == "." else relative
-
-
-def normalize_project_path(path: str) -> str:
-    normalized = posixpath.normpath((path or ".").replace("\\", "/"))
-    return "." if normalized in {"", "."} else normalized

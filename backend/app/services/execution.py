@@ -13,6 +13,7 @@ from typing import Any
 
 from app.models.pipeline import PipelineStep, ValidationIssue
 from app.models.state import ExecutionStatus, StepRuntimeState
+from app.services.pipeline_paths import resolve_pipeline_path
 from app.services.storage import ProjectStore
 from app.services.validation import PLACEHOLDER_RE, effective_step_values, has_value
 
@@ -189,7 +190,7 @@ class ExecutionManager:
         self.current_step_id = step_id
         params = self.store.params.get(step_id, {})
         command = self.build_command(step, params)
-        cwd = (self.store.current_project() / step.working_directory).resolve()
+        cwd = resolve_pipeline_path(self.store.current_project(), step.working_directory)
         log_path = self.store.log_path(step_id)
         state = self.store.state.get(step_id, StepRuntimeState())
         state.status = "running"

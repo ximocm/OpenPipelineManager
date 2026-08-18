@@ -137,6 +137,7 @@ Validation checks for:
 
 - duplicate step IDs,
 - missing dependencies and dependency cycles,
+- unsafe working directories, inputs, or outputs that resolve outside the opened project,
 - missing required inputs,
 - file/folder inputs that do not exist,
 - command placeholders without matching inputs/options/outputs,
