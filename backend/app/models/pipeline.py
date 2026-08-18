@@ -63,10 +63,10 @@ class PipelineStep(BaseModel):
         for item in [*self.inputs, *self.parameters]:
             if item.default is not None:
                 values[item.key] = item.default
-        for output in self.outputs:
-            if output.key:
-                values[output.key] = output.path
         return values
+
+    def output_values(self) -> dict[str, str]:
+        return {output.key: output.path for output in self.outputs if output.key}
 
 
 class PipelineConfig(BaseModel):

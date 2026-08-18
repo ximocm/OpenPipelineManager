@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import sys
+
 import pytest
 
 from app.models.pipeline import PipelineConfig
+from app.services.pipeline_paths import relative_project_path
 from app.services.validation import ValidationService
 
 
@@ -195,6 +198,31 @@ def test_rejects_absolute_input_path(tmp_path):
     )
 
 
+def test_rejects_windows_absolute_input_path_on_every_platform(tmp_path):
+    pipeline = PipelineConfig.model_validate(
+        {
+            "steps": [
+                {
+                    "id": "a",
+                    "name": "A",
+                    "inputs": [
+                        {"key": "input_file", "type": "file", "required": True, "default": "C:\\outside.txt"}
+                    ],
+                }
+            ]
+        }
+    )
+
+    issues = ValidationService().validate_pipeline(pipeline, tmp_path)
+
+    assert any(
+        issue.field == "input_file"
+        and issue.severity == "blocker"
+        and "absolute" in issue.message
+        for issue in issues
+    )
+
+
 def test_rejects_nested_traversal_input_path(tmp_path):
     (tmp_path / "safe").mkdir()
     outside_file = tmp_path.parent / f"{tmp_path.name}-outside.txt"
@@ -291,6 +319,34 @@ def test_preserves_leading_and_trailing_whitespace_in_input_paths(tmp_path):
     issues = ValidationService().validate_pipeline(pipeline, tmp_path)
 
     assert not [issue for issue in issues if issue.severity == "blocker"]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Backslashes are path separators on Windows")
+def test_preserves_posix_backslashes_in_input_paths(tmp_path):
+    input_path = "input\\file.txt"
+    (tmp_path / input_path).write_text("data", encoding="utf-8")
+    pipeline = PipelineConfig.model_validate(
+        {
+            "steps": [
+                {
+                    "id": "a",
+                    "name": "A",
+                    "inputs": [{"key": "input_file", "type": "file", "required": True, "default": input_path}],
+                }
+            ]
+        }
+    )
+
+    issues = ValidationService().validate_pipeline(pipeline, tmp_path)
+
+    assert not [issue for issue in issues if issue.severity == "blocker"]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Backslashes are path separators on Windows")
+def test_preserves_posix_backslashes_when_linking_step_outputs():
+    relative = relative_project_path("consume", "produce", "result\\file.txt")
+
+    assert relative == "../produce/result\\file.txt"
 
 
 def test_rejects_whitespace_only_input_paths(tmp_path):

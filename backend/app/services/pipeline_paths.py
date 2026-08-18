@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import posixpath
+import os
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
 
@@ -23,11 +23,10 @@ def resolve_pipeline_path(project_path: Path, requested_path: str | Path, *, bas
     if "\x00" in raw_path:
         raise PipelinePathError("Pipeline path contains an invalid null byte")
 
-    normalized_path = raw_path.replace("\\", "/")
-    if _is_absolute_path(raw_path, normalized_path):
+    if _is_absolute_path(raw_path):
         raise PipelinePathError(f"Pipeline path must be project-relative, not absolute: {raw_path}")
 
-    resolved = _resolve_path(base_path / normalized_path)
+    resolved = _resolve_path(base_path / raw_path)
     if not _is_inside_project(resolved, project_root):
         raise PipelinePathError(f"Pipeline path is outside the current project: {raw_path}")
 
@@ -36,20 +35,20 @@ def resolve_pipeline_path(project_path: Path, requested_path: str | Path, *, bas
 
 def relative_project_path(target_working_directory: str, source_working_directory: str, source_output_path: str) -> str:
     target = normalize_project_path(target_working_directory)
-    source = normalize_project_path(posixpath.join(source_working_directory or ".", source_output_path))
-    relative = posixpath.relpath(source, start=target)
+    source = normalize_project_path(os.path.join(source_working_directory or ".", source_output_path))
+    relative = os.path.relpath(source, start=target)
     return "." if relative == "." else relative
 
 
 def normalize_project_path(path: str) -> str:
-    normalized = posixpath.normpath((path or ".").replace("\\", "/"))
+    normalized = os.path.normpath(path or ".")
     return "." if normalized in {"", "."} else normalized
 
 
-def _is_absolute_path(raw_path: str, normalized_path: str) -> bool:
+def _is_absolute_path(raw_path: str) -> bool:
     windows_path = PureWindowsPath(raw_path)
     return (
-        PurePosixPath(normalized_path).is_absolute()
+        PurePosixPath(raw_path).is_absolute()
         or windows_path.is_absolute()
         or bool(windows_path.drive)
         or bool(windows_path.root)

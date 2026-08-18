@@ -285,3 +285,44 @@ def test_update_step_renames_references_and_keeps_runtime_data(tmp_path):
     assert store.get_step("final").dependencies == ["first"]
     assert "second" not in store.params
     assert store.params["final"]["mode"] == "slow"
+
+
+def test_create_step_does_not_persist_output_paths_as_runtime_params(tmp_path):
+    store = ProjectStore()
+    store.create_project(tmp_path)
+
+    store.create_step(
+        PipelineStep.model_validate(
+            {
+                "id": "write",
+                "name": "Write",
+                "command": "tool --out {result_file}",
+                "outputs": [{"key": "result_file", "path": "result.txt"}],
+            }
+        )
+    )
+
+    assert store.params["write"] == {}
+
+
+def test_update_step_preserves_exact_nonempty_pipeline_paths(tmp_path):
+    store = ProjectStore()
+    store.create_project(tmp_path)
+    store.create_step(PipelineStep.model_validate({"id": "write", "name": "Write"}))
+
+    updated = store.update_step(
+        "write",
+        PipelineStep.model_validate(
+            {
+                "id": "write",
+                "name": "Write",
+                "working_directory": " work ",
+                "inputs": [{"key": "source", "type": "file", "default": " input.txt "}],
+                "outputs": [{"key": "result", "path": " result.txt "}],
+            }
+        ),
+    )
+
+    assert updated.working_directory == " work "
+    assert updated.inputs[0].default == " input.txt "
+    assert updated.outputs[0].path == " result.txt "

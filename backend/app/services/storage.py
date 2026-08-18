@@ -89,7 +89,7 @@ class ProjectStore:
         self._resolve_input_sources()
         normalized_step = self.pipeline_config.steps[-1]
         ensure_step_folders(self.current_project(), [normalized_step.id])
-        self.params[normalized_step.id] = normalized_step.default_values()
+        self.params[normalized_step.id] = self._runtime_params(normalized_step)
         self.state[normalized_step.id] = StepRuntimeState()
         self.visual_layout[normalized_step.id] = self._default_step_position(len(self.pipeline_config.steps) - 1)
         self.validate()
@@ -114,9 +114,9 @@ class ProjectStore:
         if new_step_id != step_id:
             for item in pipeline.steps:
                 item.dependencies = [new_step_id if dependency == step_id else dependency for dependency in item.dependencies]
-            renamed_params = normalized_step.default_values()
-            renamed_params.update(self.params.pop(step_id, {}))
-            self.params[new_step_id] = renamed_params
+            existing_params = self.params.pop(step_id, {})
+            existing_params.update(self.params.pop(new_step_id, {}))
+            self.params[new_step_id] = self._runtime_params(normalized_step, existing_params)
             self.state[new_step_id] = self.state.pop(step_id, StepRuntimeState())
             self.visual_layout[new_step_id] = self.visual_layout.pop(step_id, self._default_step_position(current_index))
             if self.current_path is not None:
@@ -129,9 +129,10 @@ class ProjectStore:
                 if old_done.exists() and not new_done.exists():
                     old_done.rename(new_done)
         else:
-            updated_params = normalized_step.default_values()
-            updated_params.update(self.params.get(new_step_id, {}))
-            self.params[new_step_id] = updated_params
+            self.params[new_step_id] = self._runtime_params(
+                normalized_step,
+                self.params.get(new_step_id, {}),
+            )
             self.state.setdefault(new_step_id, StepRuntimeState())
             self.visual_layout.setdefault(new_step_id, self._default_step_position(current_index))
 
@@ -167,8 +168,10 @@ class ProjectStore:
         raise KeyError(f"Unknown step: {step_id}")
 
     def update_step_params(self, step_id: str, values: dict[str, Any]) -> None:
-        self.get_step(step_id)
-        self.params.setdefault(step_id, {}).update(values)
+        step = self.get_step(step_id)
+        updated_params = dict(self.params.get(step_id, {}))
+        updated_params.update(values)
+        self.params[step_id] = self._runtime_params(step, updated_params)
         self.validate()
         self.save_all()
 
@@ -258,9 +261,7 @@ class ProjectStore:
         if self.pipeline_config is None:
             return
         for step in self.pipeline_config.steps:
-            defaults = step.default_values()
-            defaults.update(self.params.get(step.id, {}))
-            self.params[step.id] = defaults
+            self.params[step.id] = self._runtime_params(step, self.params.get(step.id, {}))
             self.state.setdefault(step.id, StepRuntimeState())
             if self.is_step_ok(step):
                 self.state[step.id].status = "ok"
@@ -297,7 +298,7 @@ class ProjectStore:
         return safe_segment(requested_step_id)
 
     def _normalized_step(self, step: PipelineStep, step_id: str, dependencies: list[str]) -> PipelineStep:
-        working_directory = step.working_directory.strip() if step.working_directory else f"steps/{step_id}/work"
+        working_directory = step.working_directory if step.working_directory != "" else f"steps/{step_id}/work"
         return step.model_copy(
             update={
                 "id": step_id,
@@ -307,6 +308,17 @@ class ProjectStore:
                 "dependencies": list(dict.fromkeys(dependencies)),
             }
         )
+
+    def _runtime_params(
+        self,
+        step: PipelineStep,
+        existing: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        allowed_keys = {item.key for item in [*step.inputs, *step.parameters]}
+        values = step.default_values()
+        if existing:
+            values.update({key: value for key, value in existing.items() if key in allowed_keys})
+        return values
 
     def _resolve_input_sources(self) -> None:
         if self.pipeline_config is None:

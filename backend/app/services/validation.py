@@ -20,6 +20,7 @@ def effective_step_values(step: PipelineStep, params: dict[str, Any] | None = No
     values = step.default_values()
     if params:
         values.update(params)
+    values.update(step.output_values())
     return values
 
 

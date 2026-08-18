@@ -73,7 +73,7 @@ export function CreateStepDialog({
   const commandInputRef = useRef<HTMLTextAreaElement>(null);
 
   const cleanStepId = useMemo(() => sanitizeIdentifier(stepId) || defaultId, [stepId, defaultId]);
-  const resolvedWorkingDirectory = workingDirectory.trim() || `steps/${cleanStepId}/work`;
+  const resolvedWorkingDirectory = workingDirectory.trim() ? workingDirectory : `steps/${cleanStepId}/work`;
   const isEditing = mode === 'edit';
   const commandKeywords = useMemo(
     () =>
@@ -501,14 +501,13 @@ function toValueSpec(option: ValueDraft): ValueSpec | null {
 }
 
 function toOutputSpec(output: OutputDraft): { key?: string; label?: string; path: string } | null {
-  const path = output.path.trim();
-  if (!path) return null;
+  if (!output.path.trim()) return null;
   const key = sanitizeIdentifier(output.key);
   const label = output.label.trim();
   return {
     ...(key ? { key } : {}),
     ...(label ? { label } : {}),
-    path,
+    path: output.path,
   };
 }
 
@@ -583,6 +582,7 @@ function parseDefaultValue(type: FieldType, value: string): unknown {
     const parsed = Number(cleanValue);
     return Number.isFinite(parsed) ? parsed : undefined;
   }
+  if (type === 'file' || type === 'folder') return value;
   return cleanValue;
 }
 
