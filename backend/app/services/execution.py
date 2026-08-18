@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
 import queue
 import shlex
+import shutil
 import subprocess
 import threading
 from datetime import datetime, timezone
@@ -198,10 +200,11 @@ class ExecutionManager:
 
         with log_path.open("a", encoding="utf-8") as log_file:
             log_file.write(f"\n[{_now()}] $ {command}\n")
+            process_command, use_shell = shell_invocation(command)
             self.process = subprocess.Popen(
-                command,
+                process_command,
                 cwd=str(cwd),
-                shell=True,
+                shell=use_shell,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
@@ -240,6 +243,32 @@ class ExecutionManager:
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def shell_invocation(command: str) -> tuple[str | list[str], bool]:
+    if os.name != "nt":
+        return command, True
+
+    bash = find_posix_shell()
+    if bash:
+        return [str(bash), "-lc", command], False
+
+    return command, True
+
+
+def find_posix_shell() -> Path | None:
+    candidates = [
+        shutil.which("bash"),
+        r"C:\Program Files\Git\bin\bash.exe",
+        r"C:\Program Files (x86)\Git\bin\bash.exe",
+    ]
+    for candidate in candidates:
+        if not candidate:
+            continue
+        path = Path(candidate)
+        if path.exists():
+            return path
+    return None
 
 
 def _substitute_placeholders(command: str, values: dict[str, Any]) -> str:
