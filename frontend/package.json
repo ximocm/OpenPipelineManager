@@ -11,7 +11,7 @@
   },
   "dependencies": {
     "@vitejs/plugin-react": "^6.0.2",
-    "@xyflow/react": "^12.3.5",
+    "@xyflow/react": "^12.11.3",
     "lucide-react": "^1.17.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.6"
