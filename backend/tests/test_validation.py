@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from app.models.pipeline import PipelineConfig
 from app.services.validation import ValidationService
 
@@ -310,6 +312,26 @@ def test_rejects_whitespace_only_input_paths(tmp_path):
         issue.field == "input_file"
         and issue.severity == "blocker"
         and "only whitespace" in issue.message
+        for issue in issues
+    )
+
+
+def test_reports_symlink_loop_as_working_directory_blocker(tmp_path):
+    loop_path = tmp_path / "loop"
+    try:
+        loop_path.symlink_to(loop_path.name)
+    except OSError:
+        pytest.skip("Symbolic links are not available on this platform")
+    pipeline = PipelineConfig.model_validate(
+        {"steps": [{"id": "a", "name": "A", "working_directory": loop_path.name}]}
+    )
+
+    issues = ValidationService().validate_pipeline(pipeline, tmp_path)
+
+    assert any(
+        issue.field == "working_directory"
+        and issue.severity == "blocker"
+        and "cannot be resolved" in issue.message
         for issue in issues
     )
 

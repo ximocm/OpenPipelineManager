@@ -9,8 +9,8 @@ class PipelinePathError(ValueError):
 
 
 def resolve_pipeline_path(project_path: Path, requested_path: str | Path, *, base: Path | None = None) -> Path:
-    project_root = project_path.resolve()
-    base_path = project_root if base is None else base.resolve()
+    project_root = _resolve_path(project_path)
+    base_path = project_root if base is None else _resolve_path(base)
 
     if not _is_inside_project(base_path, project_root):
         raise PipelinePathError(f"Pipeline path base is outside the current project: {base_path}")
@@ -27,7 +27,7 @@ def resolve_pipeline_path(project_path: Path, requested_path: str | Path, *, bas
     if _is_absolute_path(raw_path, normalized_path):
         raise PipelinePathError(f"Pipeline path must be project-relative, not absolute: {raw_path}")
 
-    resolved = (base_path / normalized_path).resolve()
+    resolved = _resolve_path(base_path / normalized_path)
     if not _is_inside_project(resolved, project_root):
         raise PipelinePathError(f"Pipeline path is outside the current project: {raw_path}")
 
@@ -58,3 +58,10 @@ def _is_absolute_path(raw_path: str, normalized_path: str) -> bool:
 
 def _is_inside_project(path: Path, project_root: Path) -> bool:
     return path == project_root or path.is_relative_to(project_root)
+
+
+def _resolve_path(path: Path) -> Path:
+    try:
+        return path.resolve()
+    except (OSError, RuntimeError) as exc:
+        raise PipelinePathError(f"Pipeline path cannot be resolved: {path}") from exc

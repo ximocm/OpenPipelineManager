@@ -4,6 +4,8 @@ import ast
 import shlex
 import sys
 
+import pytest
+
 from app.models.pipeline import PipelineConfig
 from app.services.execution import ExecutionBlockedError, ExecutionManager
 from app.services.storage import ProjectStore
@@ -281,6 +283,27 @@ def test_step_ok_preserves_output_path_whitespace(tmp_path):
 
     (tmp_path / output_path).write_text("expected file", encoding="utf-8")
     assert store.is_step_ok(step) is True
+
+
+def test_step_ok_returns_false_for_symlink_loop_output(tmp_path):
+    loop_path = tmp_path / "loop"
+    try:
+        loop_path.symlink_to(loop_path.name)
+    except OSError:
+        pytest.skip("Symbolic links are not available on this platform")
+    store = ProjectStore()
+    store.create_project(tmp_path)
+    store.pipeline_config = PipelineConfig.model_validate(
+        {
+            "steps": [
+                {"id": "a", "name": "A", "outputs": [{"path": loop_path.name}]},
+            ]
+        }
+    )
+    step = store.get_step("a")
+    store.done_path("a").write_text("done", encoding="utf-8")
+
+    assert store.is_step_ok(step) is False
 
 
 def test_step_ok_ignores_unsafe_outside_project_outputs(tmp_path):
