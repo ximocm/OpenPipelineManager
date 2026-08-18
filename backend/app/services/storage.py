@@ -346,12 +346,18 @@ class ProjectStore:
                 if source_output is None:
                     continue
 
-                input_spec.default = relative_project_path(
-                    step.working_directory,
-                    source_step.working_directory,
-                    source_output.path,
-                )
-                self.params.setdefault(step.id, {})[input_spec.key] = input_spec.default
+                try:
+                    source_value = relative_project_path(
+                        self.current_project(),
+                        step.working_directory,
+                        source_step.working_directory,
+                        source_output.path,
+                    )
+                except PipelinePathError:
+                    source_value = None
+                if source_value is not None:
+                    input_spec.default = source_value
+                    self.params.setdefault(step.id, {})[input_spec.key] = source_value
                 if source_step.id not in dependencies:
                     dependencies.append(source_step.id)
 

@@ -343,10 +343,50 @@ def test_preserves_posix_backslashes_in_input_paths(tmp_path):
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="Backslashes are path separators on Windows")
-def test_preserves_posix_backslashes_when_linking_step_outputs():
-    relative = relative_project_path("consume", "produce", "result\\file.txt")
+def test_preserves_posix_backslashes_when_linking_step_outputs(tmp_path):
+    relative = relative_project_path(tmp_path, "consume", "produce", "result\\file.txt")
 
     assert relative == "../produce/result\\file.txt"
+
+
+def test_source_link_relpath_failure_becomes_validation_blocker(tmp_path, monkeypatch):
+    def fail_relpath(*args, **kwargs):
+        raise ValueError("paths are on different drives")
+
+    monkeypatch.setattr("app.services.pipeline_paths.os.path.relpath", fail_relpath)
+    pipeline = PipelineConfig.model_validate(
+        {
+            "steps": [
+                {
+                    "id": "produce",
+                    "name": "Produce",
+                    "outputs": [{"key": "result", "path": "result.txt"}],
+                },
+                {
+                    "id": "consume",
+                    "name": "Consume",
+                    "inputs": [
+                        {
+                            "key": "result_file",
+                            "type": "file",
+                            "source_step": "produce",
+                            "source_output": "result",
+                        }
+                    ],
+                },
+            ]
+        }
+    )
+
+    issues = ValidationService().validate_pipeline(pipeline, tmp_path)
+
+    assert any(
+        issue.step_id == "consume"
+        and issue.field == "result_file"
+        and issue.severity == "blocker"
+        and "cannot be made relative" in issue.message
+        for issue in issues
+    )
 
 
 def test_rejects_whitespace_only_input_paths(tmp_path):

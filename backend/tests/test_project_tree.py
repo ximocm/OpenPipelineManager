@@ -326,3 +326,43 @@ def test_update_step_preserves_exact_nonempty_pipeline_paths(tmp_path):
     assert updated.working_directory == " work "
     assert updated.inputs[0].default == " input.txt "
     assert updated.outputs[0].path == " result.txt "
+
+
+def test_import_source_link_with_cross_drive_path_becomes_validation_blocker(tmp_path):
+    store = ProjectStore()
+    store.create_project(tmp_path)
+    pipeline_path = tmp_path / "pipeline.yml"
+    pipeline_path.write_text(
+        """
+steps:
+  - id: produce
+    name: Produce
+    working_directory: 'D:\\outside'
+    outputs:
+      - key: result
+        path: result.txt
+  - id: consume
+    name: Consume
+    inputs:
+      - key: result_file
+        type: file
+        source_step: produce
+        source_output: result
+""",
+        encoding="utf-8",
+    )
+
+    store.import_pipeline(pipeline_path)
+
+    assert any(
+        issue.step_id == "produce"
+        and issue.field == "working_directory"
+        and issue.severity == "blocker"
+        for issue in store.validation
+    )
+    assert any(
+        issue.step_id == "consume"
+        and issue.field == "result_file"
+        and issue.severity == "blocker"
+        for issue in store.validation
+    )

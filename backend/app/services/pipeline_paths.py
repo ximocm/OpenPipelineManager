@@ -33,16 +33,22 @@ def resolve_pipeline_path(project_path: Path, requested_path: str | Path, *, bas
     return resolved
 
 
-def relative_project_path(target_working_directory: str, source_working_directory: str, source_output_path: str) -> str:
-    target = normalize_project_path(target_working_directory)
-    source = normalize_project_path(os.path.join(source_working_directory or ".", source_output_path))
-    relative = os.path.relpath(source, start=target)
+def relative_project_path(
+    project_path: Path,
+    target_working_directory: str,
+    source_working_directory: str,
+    source_output_path: str,
+) -> str:
+    target = resolve_pipeline_path(project_path, target_working_directory)
+    source_base = resolve_pipeline_path(project_path, source_working_directory)
+    source = resolve_pipeline_path(project_path, source_output_path, base=source_base)
+    try:
+        relative = os.path.relpath(source, start=target)
+    except (OSError, ValueError) as exc:
+        raise PipelinePathError(
+            f"Pipeline source path cannot be made relative to its target: {source}"
+        ) from exc
     return "." if relative == "." else relative
-
-
-def normalize_project_path(path: str) -> str:
-    normalized = os.path.normpath(path or ".")
-    return "." if normalized in {"", "."} else normalized
 
 
 def _is_absolute_path(raw_path: str) -> bool:

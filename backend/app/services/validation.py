@@ -53,7 +53,8 @@ class ValidationService:
 
         for step in pipeline.steps:
             issues.extend(self._validate_source_refs(step, step_map))
-            step_params = self._source_input_values(pipeline, step)
+            step_params, source_path_issues = self._source_input_values(pipeline, step, project_path)
+            issues.extend(source_path_issues)
             step_params.update(params.get(step.id, {}))
             issues.extend(self.validate_step(step, project_path, step_params))
 
@@ -123,8 +124,14 @@ class ValidationService:
                 )
         return issues
 
-    def _source_input_values(self, pipeline: PipelineConfig, step: PipelineStep) -> dict[str, str]:
+    def _source_input_values(
+        self,
+        pipeline: PipelineConfig,
+        step: PipelineStep,
+        project_path: Path,
+    ) -> tuple[dict[str, str], list[ValidationIssue]]:
         values: dict[str, str] = {}
+        issues: list[ValidationIssue] = []
         step_map = pipeline.step_by_id()
 
         for input_spec in step.inputs:
@@ -146,13 +153,25 @@ class ValidationService:
             if source_output is None:
                 continue
 
-            values[input_spec.key] = relative_project_path(
-                step.working_directory,
-                source_step.working_directory,
-                source_output.path,
-            )
+            try:
+                values[input_spec.key] = relative_project_path(
+                    project_path,
+                    step.working_directory,
+                    source_step.working_directory,
+                    source_output.path,
+                )
+            except PipelinePathError as exc:
+                issues.append(
+                    ValidationIssue(
+                        severity="blocker",
+                        step_id=step.id,
+                        field=input_spec.key,
+                        message=f"Unsafe input source path: {exc}",
+                    )
+                )
+                continue
 
-        return values
+        return values, issues
 
     def validate_step(
         self,
