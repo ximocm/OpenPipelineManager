@@ -63,9 +63,14 @@ class ProjectStore:
         pipeline_path = Path(path).expanduser()
         if not pipeline_path.is_absolute():
             pipeline_path = self.current_project() / pipeline_path
+        known_step_ids = set(self.params) | set(self.state) | set(self.visual_layout)
+        if self.pipeline_config is not None:
+            known_step_ids.update(step.id for step in self.pipeline_config.steps)
         self.pipeline_config = parse_pipeline_file(pipeline_path)
         self._resolve_input_sources()
         self._connect_linear_pipeline_if_unconnected()
+        current_step_ids = {step.id for step in self.pipeline_config.steps}
+        self._prune_removed_step_runtime(current_step_ids, known_step_ids)
         self.visual_layout = self._default_visual_layout(self.pipeline_config)
         ensure_step_folders(self.current_project(), [step.id for step in self.pipeline_config.steps])
         self._initialize_pipeline_state()
@@ -108,12 +113,18 @@ class ProjectStore:
 
         normalized_step = self._normalized_step(step, new_step_id, step.dependencies)
         pipeline.steps[current_index] = normalized_step
-        self._resolve_input_sources()
-        normalized_step = pipeline.steps[current_index]
 
         if new_step_id != step_id:
             for item in pipeline.steps:
                 item.dependencies = [new_step_id if dependency == step_id else dependency for dependency in item.dependencies]
+                for input_spec in item.inputs:
+                    if input_spec.source_step == step_id:
+                        input_spec.source_step = new_step_id
+
+        self._resolve_input_sources()
+        normalized_step = pipeline.steps[current_index]
+
+        if new_step_id != step_id:
             existing_params = self.params.pop(step_id, {})
             existing_params.update(self.params.pop(new_step_id, {}))
             self.params[new_step_id] = self._runtime_params(normalized_step, existing_params)
@@ -262,9 +273,13 @@ class ProjectStore:
             return
         for step in self.pipeline_config.steps:
             self.params[step.id] = self._runtime_params(step, self.params.get(step.id, {}))
-            self.state.setdefault(step.id, StepRuntimeState())
+            runtime_state = self.state.setdefault(step.id, StepRuntimeState())
             if self.is_step_ok(step):
-                self.state[step.id].status = "ok"
+                runtime_state.status = "ok"
+            elif runtime_state.status == "ok":
+                runtime_state.status = "pending"
+                runtime_state.exit_code = None
+                runtime_state.message = ""
 
     def _ensure_manager_dirs(self) -> None:
         self.manager_dir().mkdir(exist_ok=True)
@@ -319,6 +334,30 @@ class ProjectStore:
         if existing:
             values.update({key: value for key, value in existing.items() if key in allowed_keys})
         return values
+
+    def _prune_removed_step_runtime(
+        self,
+        current_step_ids: set[str],
+        known_step_ids: set[str],
+    ) -> None:
+        self.params = {
+            step_id: values
+            for step_id, values in self.params.items()
+            if step_id in current_step_ids
+        }
+        self.state = {
+            step_id: value
+            for step_id, value in self.state.items()
+            if step_id in current_step_ids
+        }
+        self.visual_layout = {
+            step_id: position
+            for step_id, position in self.visual_layout.items()
+            if step_id in current_step_ids
+        }
+        for step_id in known_step_ids - current_step_ids:
+            self.log_path(step_id).unlink(missing_ok=True)
+            self.done_path(step_id).unlink(missing_ok=True)
 
     def _resolve_input_sources(self) -> None:
         if self.pipeline_config is None:

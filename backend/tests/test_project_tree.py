@@ -287,6 +287,111 @@ def test_update_step_renames_references_and_keeps_runtime_data(tmp_path):
     assert store.params["final"]["mode"] == "slow"
 
 
+def test_update_step_renames_downstream_input_source_references(tmp_path):
+    store = ProjectStore()
+    store.create_project(tmp_path)
+    (tmp_path / "analysis").mkdir()
+    pipeline_path = tmp_path / "pipeline.yml"
+    pipeline_path.write_text(
+        """
+steps:
+  - id: produce
+    name: Produce
+    outputs:
+      - key: result
+        path: output/result.txt
+  - id: consume
+    name: Consume
+    working_directory: analysis
+    inputs:
+      - key: result_file
+        type: file
+        source_step: produce
+        source_output: result
+""",
+        encoding="utf-8",
+    )
+    store.import_pipeline(pipeline_path)
+    producer = store.get_step("produce")
+
+    store.update_step("produce", producer.model_copy(update={"id": "prepare"}))
+
+    consumer = store.get_step("consume")
+    assert consumer.inputs[0].source_step == "prepare"
+    assert consumer.inputs[0].default == "../output/result.txt"
+    assert consumer.dependencies == ["prepare"]
+    assert not [issue for issue in store.validation if issue.severity == "blocker"]
+
+    reloaded_store = ProjectStore()
+    reloaded_store.open_project(tmp_path)
+    reloaded_consumer = reloaded_store.get_step("consume")
+    assert reloaded_consumer.inputs[0].source_step == "prepare"
+    assert reloaded_consumer.dependencies == ["prepare"]
+
+
+def test_import_pipeline_prunes_runtime_data_for_removed_steps(tmp_path):
+    store = ProjectStore()
+    store.create_project(tmp_path)
+    store.create_step(PipelineStep.model_validate({"id": "obsolete", "name": "Obsolete"}))
+    store.params["obsolete"] = {"mode": "legacy"}
+    store.state["obsolete"].status = "ok"
+    store.visual_layout["obsolete"] = {"x": 999.0, "y": 999.0}
+    store.log_path("obsolete").write_text("old log", encoding="utf-8")
+    store.done_path("obsolete").write_text("done", encoding="utf-8")
+    store.save_all()
+    replacement_path = tmp_path / "replacement.yml"
+    replacement_path.write_text(
+        """
+steps:
+  - id: current
+    name: Current
+""",
+        encoding="utf-8",
+    )
+
+    store.import_pipeline(replacement_path)
+
+    assert set(store.params) == {"current"}
+    assert set(store.state) == {"current"}
+    assert set(store.visual_layout) == {"current"}
+    assert not store.log_path("obsolete").exists()
+    assert not store.done_path("obsolete").exists()
+
+    reloaded_store = ProjectStore()
+    reloaded_store.open_project(tmp_path)
+    assert set(reloaded_store.params) == {"current"}
+    assert set(reloaded_store.state) == {"current"}
+    assert set(reloaded_store.visual_layout) == {"current"}
+
+
+def test_open_project_downgrades_stale_ok_state_when_output_disappears(tmp_path):
+    store = ProjectStore()
+    store.create_project(tmp_path)
+    store.create_step(
+        PipelineStep.model_validate(
+            {
+                "id": "write",
+                "name": "Write",
+                "working_directory": ".",
+                "outputs": [{"path": "result.txt"}],
+            }
+        )
+    )
+    output_path = tmp_path / "result.txt"
+    output_path.write_text("result", encoding="utf-8")
+    store.done_path("write").write_text("done", encoding="utf-8")
+    store.state["write"].status = "ok"
+    store.state["write"].exit_code = 0
+    store.save_all()
+    output_path.unlink()
+
+    reloaded_store = ProjectStore()
+    reloaded_store.open_project(tmp_path)
+
+    assert reloaded_store.state["write"].status == "pending"
+    assert reloaded_store.state["write"].exit_code is None
+
+
 def test_create_step_does_not_persist_output_paths_as_runtime_params(tmp_path):
     store = ProjectStore()
     store.create_project(tmp_path)
