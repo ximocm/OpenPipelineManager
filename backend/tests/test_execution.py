@@ -262,6 +262,27 @@ def test_step_ok_requires_done_marker_and_outputs(tmp_path):
     assert store.is_step_ok(step) is True
 
 
+def test_step_ok_preserves_output_path_whitespace(tmp_path):
+    output_path = " result.txt "
+    store = ProjectStore()
+    store.create_project(tmp_path)
+    store.pipeline_config = PipelineConfig.model_validate(
+        {
+            "steps": [
+                {"id": "a", "name": "A", "outputs": [{"path": output_path}]},
+            ]
+        }
+    )
+    step = store.get_step("a")
+
+    store.done_path("a").write_text("done", encoding="utf-8")
+    (tmp_path / output_path.strip()).write_text("wrong file", encoding="utf-8")
+    assert store.is_step_ok(step) is False
+
+    (tmp_path / output_path).write_text("expected file", encoding="utf-8")
+    assert store.is_step_ok(step) is True
+
+
 def test_step_ok_ignores_unsafe_outside_project_outputs(tmp_path):
     outside_file = tmp_path.parent / f"{tmp_path.name}-outside-output.txt"
     outside_file.write_text("ok", encoding="utf-8")

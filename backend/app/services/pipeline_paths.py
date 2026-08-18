@@ -15,7 +15,11 @@ def resolve_pipeline_path(project_path: Path, requested_path: str | Path, *, bas
     if not _is_inside_project(base_path, project_root):
         raise PipelinePathError(f"Pipeline path base is outside the current project: {base_path}")
 
-    raw_path = str(requested_path).strip() or "."
+    raw_path = str(requested_path)
+    if raw_path == "":
+        raw_path = "."
+    elif not raw_path.strip():
+        raise PipelinePathError("Pipeline path cannot contain only whitespace")
     if "\x00" in raw_path:
         raise PipelinePathError("Pipeline path contains an invalid null byte")
 

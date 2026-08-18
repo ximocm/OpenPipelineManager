@@ -271,6 +271,49 @@ def test_accepts_valid_relative_input_and_output_paths(tmp_path):
     assert not [issue for issue in issues if issue.severity == "blocker"]
 
 
+def test_preserves_leading_and_trailing_whitespace_in_input_paths(tmp_path):
+    input_path = " input.txt "
+    (tmp_path / input_path).write_text("data", encoding="utf-8")
+    pipeline = PipelineConfig.model_validate(
+        {
+            "steps": [
+                {
+                    "id": "a",
+                    "name": "A",
+                    "inputs": [{"key": "input_file", "type": "file", "required": True, "default": input_path}],
+                }
+            ]
+        }
+    )
+
+    issues = ValidationService().validate_pipeline(pipeline, tmp_path)
+
+    assert not [issue for issue in issues if issue.severity == "blocker"]
+
+
+def test_rejects_whitespace_only_input_paths(tmp_path):
+    pipeline = PipelineConfig.model_validate(
+        {
+            "steps": [
+                {
+                    "id": "a",
+                    "name": "A",
+                    "inputs": [{"key": "input_file", "type": "file", "required": True, "default": "   "}],
+                }
+            ]
+        }
+    )
+
+    issues = ValidationService().validate_pipeline(pipeline, tmp_path)
+
+    assert any(
+        issue.field == "input_file"
+        and issue.severity == "blocker"
+        and "only whitespace" in issue.message
+        for issue in issues
+    )
+
+
 def test_allows_external_program_paths_in_command(tmp_path):
     pipeline = PipelineConfig.model_validate(
         {
