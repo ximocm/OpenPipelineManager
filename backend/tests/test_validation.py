@@ -448,3 +448,255 @@ def test_allows_external_program_paths_in_command(tmp_path):
     issues = ValidationService().validate_pipeline(pipeline, tmp_path)
 
     assert not [issue for issue in issues if issue.severity == "blocker"]
+
+
+@pytest.mark.parametrize(
+    ("inputs", "parameters", "outputs"),
+    [
+        ([{"key": "shared", "type": "text"}], [{"key": "shared", "type": "text"}], []),
+        ([{"key": "shared", "type": "text"}], [], [{"key": "shared", "path": "result.txt"}]),
+        ([], [{"key": "shared", "type": "text"}], [{"key": "shared", "path": "result.txt"}]),
+    ],
+    ids=["input-and-parameter", "input-and-output", "parameter-and-output"],
+)
+def test_duplicate_keys_across_step_fields_are_blockers(tmp_path, inputs, parameters, outputs):
+    pipeline = PipelineConfig.model_validate(
+        {
+            "steps": [
+                {"id": "a", "name": "A", "inputs": inputs, "parameters": parameters, "outputs": outputs}
+            ]
+        }
+    )
+
+    issues = ValidationService().validate_pipeline(pipeline, tmp_path)
+
+    assert any(issue.field == "shared" and issue.severity == "blocker" for issue in issues)
+
+
+@pytest.mark.parametrize("key", ["", "   "], ids=["empty", "whitespace"])
+@pytest.mark.parametrize(
+    ("field_name", "field_value"),
+    [
+        ("inputs", {"key": "", "type": "text"}),
+        ("parameters", {"key": "", "type": "text"}),
+    ],
+    ids=["input", "parameter"],
+)
+def test_empty_step_field_keys_are_blockers(tmp_path, key, field_name, field_value):
+    field_value = {**field_value, "key": key}
+    pipeline = PipelineConfig.model_validate(
+        {"steps": [{"id": "a", "name": "A", field_name: [field_value]}]}
+    )
+
+    issues = ValidationService().validate_pipeline(pipeline, tmp_path)
+
+    assert any(issue.severity == "blocker" and "key" in issue.message.lower() for issue in issues)
+
+
+@pytest.mark.parametrize("path", ["", "   "], ids=["empty", "whitespace"])
+def test_empty_output_paths_are_blockers(tmp_path, path):
+    pipeline = PipelineConfig.model_validate(
+        {"steps": [{"id": "a", "name": "A", "outputs": [{"key": "result", "path": path}]}]}
+    )
+
+    issues = ValidationService().validate_pipeline(pipeline, tmp_path)
+
+    assert any(issue.field == "result" and issue.severity == "blocker" for issue in issues)
+
+
+def test_unkeyed_output_remains_valid_after_model_round_trip(tmp_path):
+    pipeline = PipelineConfig.model_validate(
+        {"steps": [{"id": "a", "name": "A", "outputs": [{"path": "result.txt"}]}]}
+    )
+    reloaded = PipelineConfig.model_validate(pipeline.model_dump(mode="json"))
+
+    issues = ValidationService().validate_pipeline(reloaded, tmp_path)
+
+    assert not [issue for issue in issues if issue.severity == "blocker"]
+
+
+def test_whitespace_only_output_key_is_blocker(tmp_path):
+    pipeline = PipelineConfig.model_validate(
+        {"steps": [{"id": "a", "name": "A", "outputs": [{"key": "   ", "path": "result.txt"}]}]}
+    )
+
+    issues = ValidationService().validate_pipeline(pipeline, tmp_path)
+
+    assert any(issue.severity == "blocker" and "output key" in issue.message.lower() for issue in issues)
+
+
+@pytest.mark.parametrize(
+    ("spec", "provided_value", "expected_message"),
+    [
+        ({"key": "title", "type": "text", "required": True}, None, "required"),
+        ({"key": "count", "type": "integer"}, "not-a-number", "numeric"),
+        ({"key": "count", "type": "integer"}, 1.5, "integer"),
+        ({"key": "ratio", "type": "decimal", "min": 0, "max": 1}, 2, "maximum"),
+        ({"key": "mode", "type": "select", "options": ["fast"]}, "slow", "invalid option"),
+    ],
+    ids=["required", "non-numeric", "fractional-integer", "out-of-range", "invalid-select"],
+)
+def test_non_file_inputs_use_value_spec_validation(tmp_path, spec, provided_value, expected_message):
+    pipeline = PipelineConfig.model_validate({"steps": [{"id": "a", "name": "A", "inputs": [spec]}]})
+    values = {} if provided_value is None else {"a": {spec["key"]: provided_value}}
+
+    issues = ValidationService().validate_pipeline(pipeline, tmp_path, values)
+
+    assert any(
+        issue.field == spec["key"]
+        and issue.severity == "blocker"
+        and expected_message in issue.message.lower()
+        for issue in issues
+    )
+
+
+@pytest.mark.parametrize("value", [True, False, float("nan"), float("inf"), float("-inf")])
+def test_non_numeric_values_and_non_finite_numbers_are_blockers(tmp_path, value):
+    pipeline = PipelineConfig.model_validate(
+        {
+            "steps": [
+                {
+                    "id": "a",
+                    "name": "A",
+                    "parameters": [{"key": "threshold", "type": "decimal"}],
+                }
+            ]
+        }
+    )
+
+    issues = ValidationService().validate_pipeline(pipeline, tmp_path, {"a": {"threshold": value}})
+
+    assert any(issue.field == "threshold" and issue.severity == "blocker" for issue in issues)
+
+
+@pytest.mark.parametrize("field_name", ["inputs", "parameters"])
+@pytest.mark.parametrize("value_source", ["default", "submitted"])
+@pytest.mark.parametrize("invalid_value", ["true", "false", "yes", "no", 0, 1])
+def test_invalid_boolean_defaults_and_submitted_values_are_blockers(
+    tmp_path, field_name, value_source, invalid_value
+):
+    spec = {"key": "enabled", "type": "boolean"}
+    params = {}
+    if value_source == "default":
+        spec["default"] = invalid_value
+    else:
+        params = {"a": {"enabled": invalid_value}}
+    pipeline = PipelineConfig.model_validate(
+        {"steps": [{"id": "a", "name": "A", field_name: [spec]}]}
+    )
+
+    issues = ValidationService().validate_pipeline(pipeline, tmp_path, params)
+
+    assert any(
+        issue.field == "enabled" and issue.severity == "blocker" and "boolean" in issue.message.lower()
+        for issue in issues
+    )
+
+
+@pytest.mark.parametrize("field_name", ["inputs", "parameters"])
+@pytest.mark.parametrize("value_source", ["default", "submitted"])
+@pytest.mark.parametrize("boolean_value", [True, False])
+def test_native_boolean_defaults_and_submitted_values_are_valid(
+    tmp_path, field_name, value_source, boolean_value
+):
+    spec = {"key": "enabled", "type": "boolean"}
+    params = {}
+    if value_source == "default":
+        spec["default"] = boolean_value
+    else:
+        params = {"a": {"enabled": boolean_value}}
+    pipeline = PipelineConfig.model_validate(
+        {"steps": [{"id": "a", "name": "A", field_name: [spec]}]}
+    )
+
+    issues = ValidationService().validate_pipeline(pipeline, tmp_path, params)
+
+    assert not [issue for issue in issues if issue.field == "enabled" and issue.severity == "blocker"]
+
+
+@pytest.mark.parametrize("field_name", ["inputs", "parameters"])
+def test_inverted_numeric_ranges_are_blockers(tmp_path, field_name):
+    spec = {"key": "threshold", "type": "decimal", "min": 10, "max": 1, "default": 5}
+    pipeline = PipelineConfig.model_validate(
+        {"steps": [{"id": "a", "name": "A", field_name: [spec]}]}
+    )
+
+    issues = ValidationService().validate_pipeline(pipeline, tmp_path)
+
+    assert any(
+        issue.field == "threshold" and issue.severity == "blocker" and "minimum" in issue.message.lower()
+        for issue in issues
+    )
+
+
+@pytest.mark.parametrize("field_name", ["inputs", "parameters"])
+@pytest.mark.parametrize("bound_name", ["min", "max"])
+@pytest.mark.parametrize("bound_value", [float("nan"), float("inf"), float("-inf")])
+def test_non_finite_numeric_bounds_are_blockers(tmp_path, field_name, bound_name, bound_value):
+    spec = {"key": "threshold", "type": "decimal", bound_name: bound_value}
+    pipeline = PipelineConfig.model_validate(
+        {"steps": [{"id": "a", "name": "A", field_name: [spec]}]}
+    )
+
+    issues = ValidationService().validate_pipeline(pipeline, tmp_path)
+
+    assert any(
+        issue.field == "threshold" and issue.severity == "blocker" and "finite" in issue.message.lower()
+        for issue in issues
+    )
+
+
+@pytest.mark.parametrize("field_name", ["inputs", "parameters"])
+@pytest.mark.parametrize("value_source", ["default", "submitted"])
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+def test_non_finite_numeric_defaults_and_submitted_values_are_blockers(
+    tmp_path, field_name, value_source, value
+):
+    spec = {"key": "threshold", "type": "decimal"}
+    params = {}
+    if value_source == "default":
+        spec["default"] = value
+    else:
+        params = {"a": {"threshold": value}}
+    pipeline = PipelineConfig.model_validate(
+        {"steps": [{"id": "a", "name": "A", field_name: [spec]}]}
+    )
+
+    issues = ValidationService().validate_pipeline(pipeline, tmp_path, params)
+
+    assert any(
+        issue.field == "threshold" and issue.severity == "blocker" and "finite" in issue.message.lower()
+        for issue in issues
+    )
+
+
+def test_valid_non_file_input_and_parameter_values_do_not_create_blockers(tmp_path):
+    pipeline = PipelineConfig.model_validate(
+        {
+            "steps": [
+                {
+                    "id": "a",
+                    "name": "A",
+                    "inputs": [
+                        {"key": "title", "type": "text", "required": True, "default": "report"},
+                        {"key": "count", "type": "integer", "min": 1, "max": 5, "default": 3},
+                        {"key": "ratio", "type": "decimal", "min": 0, "max": 1, "default": 0.25},
+                        {"key": "mode", "type": "select", "options": ["fast", "safe"], "default": "fast"},
+                        {"key": "enabled", "type": "boolean", "required": True, "default": False},
+                    ],
+                    "parameters": [
+                        {"key": "retries", "type": "integer", "min": 0, "max": 3, "default": 2},
+                        {"key": "dry_run", "type": "boolean", "default": True},
+                    ],
+                    "outputs": [
+                        {"key": "result", "path": "outputs/result.txt"},
+                        {"path": "outputs/unnamed.txt"},
+                    ],
+                }
+            ]
+        }
+    )
+
+    issues = ValidationService().validate_pipeline(pipeline, tmp_path)
+
+    assert not [issue for issue in issues if issue.severity == "blocker"]

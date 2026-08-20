@@ -138,11 +138,14 @@ Validation checks for:
 - duplicate step IDs,
 - missing dependencies and dependency cycles,
 - unsafe working directories, inputs, or outputs that resolve outside the opened project,
+- empty or duplicate input, parameter, and keyed-output names,
+- empty output paths,
 - missing required inputs,
 - file/folder inputs that do not exist,
 - command placeholders without matching inputs/options/outputs,
 - missing placeholder values,
-- invalid numeric bounds,
+- invalid or non-finite numeric values and inverted bounds,
+- non-boolean values assigned to boolean fields,
 - selector values outside predefined options,
 - invalid `source_step` or `source_output` links.
 

@@ -23,6 +23,7 @@ interface ValueDraft {
   maximum: string;
   sourceStep: string;
   sourceOutput: string;
+  invalidBooleanDefault?: string;
 }
 
 interface OutputDraft {
@@ -42,6 +43,7 @@ interface OutputChoice {
 }
 
 const fieldTypes: FieldType[] = ['text', 'integer', 'decimal', 'boolean', 'select', 'file', 'folder'];
+const INVALID_BOOLEAN_DEFAULT_OPTION = '__invalid_boolean_default__';
 const fieldTypeLabels: Record<FieldType, string> = {
   text: 'Text',
   integer: 'Integer',
@@ -91,9 +93,11 @@ export function CreateStepDialog({
     () => buildPreviousOutputChoices(pipelineSteps, initialStep?.id ?? null, resolvedWorkingDirectory),
     [pipelineSteps, initialStep?.id, resolvedWorkingDirectory],
   );
+  const hasInvalidBooleanDefault = [...inputs, ...options].some((value) => value.invalidBooleanDefault !== undefined);
 
   const handleSubmit = (event: FormEvent) => {
     event.preventDefault();
+    if (hasInvalidBooleanDefault) return;
     onCreate({
       id: cleanStepId,
       name: name.trim() || cleanStepId,
@@ -236,8 +240,8 @@ export function CreateStepDialog({
         </div>
 
         <div className="dialog-footer">
-          <span>{resolvedWorkingDirectory}</span>
-          <button type="submit" className="command-button">
+          <span>{hasInvalidBooleanDefault ? 'Choose a valid boolean default before saving.' : resolvedWorkingDirectory}</span>
+          <button type="submit" className="command-button" disabled={hasInvalidBooleanDefault}>
             {isEditing ? 'Save step' : 'Create step'}
           </button>
         </div>
@@ -293,7 +297,18 @@ function ValueSpecSection({
               </label>
               <label className="field">
                 <span>Type</span>
-                <select value={value.type} onChange={(event) => onUpdate(value.id, { type: event.target.value as FieldType })}>
+                <select
+                  value={value.type}
+                  onChange={(event) => {
+                    const type = event.target.value as FieldType;
+                    onUpdate(value.id, {
+                      type,
+                      ...(type === 'boolean' || value.type === 'boolean'
+                        ? { defaultValue: '', invalidBooleanDefault: undefined }
+                        : {}),
+                    });
+                  }}
+                >
                   {fieldTypes.map((type) => (
                     <option key={type} value={type}>
                       {fieldTypeLabels[type]}
@@ -303,7 +318,26 @@ function ValueSpecSection({
               </label>
               <label className="field">
                 <span>Default</span>
-                <input value={value.defaultValue} onChange={(event) => onUpdate(value.id, { defaultValue: event.target.value })} />
+                {value.type === 'boolean' ? (
+                  <select
+                    value={value.defaultValue}
+                    aria-invalid={value.invalidBooleanDefault !== undefined}
+                    onChange={(event) =>
+                      onUpdate(value.id, { defaultValue: event.target.value, invalidBooleanDefault: undefined })
+                    }
+                  >
+                    {value.invalidBooleanDefault !== undefined && (
+                      <option value={INVALID_BOOLEAN_DEFAULT_OPTION} disabled>
+                        {`Invalid stored value: ${value.invalidBooleanDefault}`}
+                      </option>
+                    )}
+                    <option value="">No default</option>
+                    <option value="true">True</option>
+                    <option value="false">False</option>
+                  </select>
+                ) : (
+                  <input value={value.defaultValue} onChange={(event) => onUpdate(value.id, { defaultValue: event.target.value })} />
+                )}
               </label>
               <button
                 type="button"
@@ -445,18 +479,24 @@ function emptyValueDraft(type: FieldType): ValueDraft {
 }
 
 function toValueDraft(spec: ValueSpec, index: number): ValueDraft {
+  const invalidBooleanDefault = spec.type === 'boolean' && spec.default !== undefined && spec.default !== null && typeof spec.default !== 'boolean';
   return {
     id: Date.now() + index,
     key: spec.key,
     label: spec.label ?? '',
     type: spec.type,
     required: Boolean(spec.required),
-    defaultValue: spec.default === undefined || spec.default === null ? '' : String(spec.default),
+    defaultValue: invalidBooleanDefault
+      ? INVALID_BOOLEAN_DEFAULT_OPTION
+      : spec.default === undefined || spec.default === null
+        ? ''
+        : String(spec.default),
     choices: (spec.options ?? []).join(', '),
     minimum: spec.min === undefined || spec.min === null ? '' : String(spec.min),
     maximum: spec.max === undefined || spec.max === null ? '' : String(spec.max),
     sourceStep: spec.source_step ?? '',
     sourceOutput: spec.source_output ?? '',
+    ...(invalidBooleanDefault ? { invalidBooleanDefault: String(spec.default) } : {}),
   };
 }
 
@@ -573,7 +613,11 @@ function relativePath(fromDirectory: string, toPath: string): string {
 function parseDefaultValue(type: FieldType, value: string): unknown {
   const cleanValue = value.trim();
   if (!cleanValue) return undefined;
-  if (type === 'boolean') return ['1', 'true', 'yes', 'on'].includes(cleanValue.toLowerCase());
+  if (type === 'boolean') {
+    if (cleanValue === 'true') return true;
+    if (cleanValue === 'false') return false;
+    return undefined;
+  }
   if (type === 'integer') {
     const parsed = Number.parseInt(cleanValue, 10);
     return Number.isFinite(parsed) ? parsed : undefined;

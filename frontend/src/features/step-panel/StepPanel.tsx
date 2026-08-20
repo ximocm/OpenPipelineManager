@@ -120,7 +120,7 @@ function FieldEditor({
     <label className="field">
       <span>{label}</span>
       {spec.type === 'boolean' ? (
-        <input type="checkbox" checked={Boolean(value)} onChange={(event) => onCommit(event.target.checked)} />
+        <input type="checkbox" checked={value === true} onChange={(event) => onCommit(event.target.checked)} />
       ) : spec.type === 'select' ? (
         <select value={String(value)} onChange={(event) => onCommit(event.target.value)}>
           {(spec.options ?? []).map((option) => (
