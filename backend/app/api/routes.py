@@ -23,6 +23,7 @@ from app.services.project_tree import (
     preview_file,
     rename_project_path,
     upload_project_file,
+    upload_project_file_target,
     write_project_file,
 )
 from app.services.storage import ProjectStore
@@ -228,11 +229,22 @@ def delete_file_post(request: FileDeleteRequest) -> dict[str, str]:
 def upload_files(request: FileUploadRequest) -> dict[str, list[str]]:
     try:
         root = store.current_project()
+        targets = [
+            upload_project_file_target(root, request.target_directory, item.name)
+            for item in request.files
+        ]
+        seen_targets: set[Path] = set()
+        for target in targets:
+            if target in seen_targets:
+                raise FileExistsError(f"Path already requested for upload: {target.relative_to(root)}")
+            seen_targets.add(target)
         uploaded = [
             str(upload_project_file(root, request.target_directory, item.name, item.content_base64).relative_to(root))
             for item in request.files
         ]
         return {"paths": uploaded}
+    except FileExistsError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

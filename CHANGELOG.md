@@ -23,6 +23,7 @@ The format follows Keep a Changelog-style sections, and the project uses semanti
 - Updated locked Nano ID and PostCSS transitive dependencies to versions without the reported high-severity vulnerabilities.
 - Reconciled persisted step state after reloads, removed orphaned runtime data on pipeline imports, and kept source links valid when steps are renamed.
 - Blocked ambiguous field keys, empty output paths, invalid input values, inverted numeric ranges, non-finite numbers, and non-boolean values before pipeline execution.
+- Prevented uploads from overwriting existing project files, confirmed discarding dirty editor tabs, and made recursive folder deletion explicit.
 
 ## 0.1.1 - 2026-05-18
 
