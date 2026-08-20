@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from pathlib import Path
+
+import pytest
+
 from app.models.pipeline import PipelineStep
 from app.services.project_tree import (
     PROJECT_CONFIG_FILENAME,
@@ -113,6 +117,62 @@ def test_upload_file_rejects_path_escape(tmp_path):
         assert "outside" in str(exc)
     else:
         raise AssertionError("Expected path escape to be rejected")
+
+
+def test_upload_file_rejects_existing_file_without_modifying_it(tmp_path):
+    ensure_project_scaffold(tmp_path)
+    target = tmp_path / "Input" / "sample.txt"
+    target.write_bytes(b"original")
+
+    try:
+        upload_project_file(tmp_path, "Input", "sample.txt", "bmV3")
+    except FileExistsError as exc:
+        assert "already exists" in str(exc)
+    else:
+        raise AssertionError("Expected existing upload target to be rejected")
+
+    assert target.read_bytes() == b"original"
+
+
+def test_upload_file_rejects_dangling_symlink_without_replacing_it(tmp_path):
+    ensure_project_scaffold(tmp_path)
+    target = tmp_path / "Input" / "linked.txt"
+    _symlink_or_skip(target, tmp_path / "missing-target.txt")
+
+    try:
+        upload_project_file(tmp_path, "Input", "linked.txt", "bmV3")
+    except FileExistsError as exc:
+        assert "already exists" in str(exc)
+    else:
+        raise AssertionError("Expected dangling symlink upload target to be rejected")
+
+    assert target.is_symlink()
+
+
+def test_upload_file_rejects_symlink_without_modifying_its_target(tmp_path):
+    project_root = tmp_path / "project"
+    ensure_project_scaffold(project_root)
+    linked_file = tmp_path / "outside.txt"
+    linked_file.write_bytes(b"original")
+    target = project_root / "Input" / "linked.txt"
+    _symlink_or_skip(target, linked_file)
+
+    try:
+        upload_project_file(project_root, "Input", "linked.txt", "bmV3")
+    except FileExistsError as exc:
+        assert "already exists" in str(exc)
+    else:
+        raise AssertionError("Expected symlink upload target to be rejected")
+
+    assert target.is_symlink()
+    assert linked_file.read_bytes() == b"original"
+
+
+def _symlink_or_skip(link: Path, target: Path) -> None:
+    try:
+        link.symlink_to(target)
+    except (NotImplementedError, OSError) as exc:
+        pytest.skip(f"Symlinks are unavailable in this environment: {exc}")
 
 
 def test_validate_project_folder_requires_project_config(tmp_path):

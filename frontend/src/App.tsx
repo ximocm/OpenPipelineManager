@@ -431,10 +431,18 @@ export function App() {
   };
 
   const handleDeletePath = async (path: string) => {
+    const dirtyTabs = fileTabs.filter((tab) => tab.dirty && isPathOrDescendant(tab.path, path));
+    if (dirtyTabs.length > 0) {
+      const files = dirtyTabs.map((tab) => tab.path).join('\n');
+      if (!window.confirm(`Deleting ${path} will discard unsaved changes in:\n${files}\n\nDiscard these changes and delete?`)) return;
+    }
+
     await runAction('Deleted', async () => {
       await deleteFilePath(path);
-      setFileTabs((current) => current.filter((tab) => tab.path !== path && !tab.path.startsWith(`${path}/`)));
-      if (activeCenterTab === fileTabId(path) || activeCenterTab.startsWith(`file:${path}/`)) setActiveCenterTab('pipeline');
+      setFileTabs((current) => current.filter((tab) => !isPathOrDescendant(tab.path, path)));
+      if (activeCenterTab.startsWith('file:') && isPathOrDescendant(activeCenterTab.slice('file:'.length), path)) {
+        setActiveCenterTab('pipeline');
+      }
       await refresh();
       return path;
     });
@@ -483,6 +491,8 @@ export function App() {
   };
 
   const handleCloseFileTab = (path: string) => {
+    const tab = fileTabs.find((item) => item.path === path);
+    if (tab?.dirty && !window.confirm(`Discard unsaved changes to ${path}?`)) return;
     setFileTabs((current) => current.filter((tab) => tab.path !== path));
     if (activeCenterTab === fileTabId(path)) setActiveCenterTab('pipeline');
   };
@@ -905,6 +915,10 @@ function replacePathPrefix(path: string, oldPrefix: string, newPrefix: string): 
   if (path === oldPrefix) return newPrefix;
   if (path.startsWith(`${oldPrefix}/`)) return `${newPrefix}${path.slice(oldPrefix.length)}`;
   return null;
+}
+
+function isPathOrDescendant(path: string, parentPath: string): boolean {
+  return path === parentPath || path.startsWith(`${parentPath}/`);
 }
 
 function fileTabId(path: string): string {

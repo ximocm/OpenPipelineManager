@@ -207,13 +207,27 @@ def delete_project_path(root: Path, requested_path: str) -> None:
 
 
 def upload_project_file(root: Path, target_directory: str, name: str, content_base64: str) -> Path:
+    target = upload_project_file_target(root, target_directory, name)
+    content = base64.b64decode(content_base64)
+    try:
+        with target.open("xb") as file:
+            file.write(content)
+    except FileExistsError as exc:
+        raise FileExistsError(f"Path already exists: {target.relative_to(root.resolve())}") from exc
+    return target
+
+
+def upload_project_file_target(root: Path, target_directory: str, name: str) -> Path:
     destination_dir = resolve_project_path(root, target_directory)
     if not destination_dir.is_dir():
         raise ValueError("Upload target is not a directory")
     if "/" in name or "\\" in name or not name.strip():
         raise ValueError("Uploaded file name must be a single file name")
     target = destination_dir / name.strip()
-    target.write_bytes(base64.b64decode(content_base64))
+    # Path.exists() is false for dangling symlinks, but they are still an
+    # existing directory entry and must never be replaced by an upload.
+    if target.exists() or target.is_symlink():
+        raise FileExistsError(f"Path already exists: {target.relative_to(root.resolve())}")
     return target
 
 
