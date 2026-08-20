@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import re
 from collections import Counter
 from pathlib import Path
@@ -206,6 +207,8 @@ class ValidationService:
 
         step_base = working_directory or project_path.resolve()
 
+        issues.extend(self._validate_declared_keys(step))
+
         for spec in step.inputs:
             value = values.get(spec.key)
             if spec.type in {"file", "folder"}:
@@ -254,8 +257,20 @@ class ValidationService:
                             message=f"Optional input is not set: {spec.label or spec.key}",
                         )
                     )
+            else:
+                issues.extend(self._validate_value_spec(step.id, spec, value, kind="input"))
 
         for output in step.outputs:
+            if not output.path or not output.path.strip():
+                issues.append(
+                    ValidationIssue(
+                        severity="blocker",
+                        step_id=step.id,
+                        field=output.key or "outputs",
+                        message=f"Output path is missing: {output.key or 'output'}",
+                    )
+                )
+                continue
             try:
                 resolve_pipeline_path(project_path, output.path, base=step_base)
             except PipelinePathError as exc:
@@ -269,7 +284,7 @@ class ValidationService:
                 )
 
         for spec in step.parameters:
-            issues.extend(self._validate_value_spec(step.id, spec, values.get(spec.key)))
+            issues.extend(self._validate_value_spec(step.id, spec, values.get(spec.key), kind="parameter"))
 
         declared_keys = {item.key for item in [*step.inputs, *step.parameters]}
         declared_keys.update(output.key for output in step.outputs if output.key)
@@ -295,37 +310,138 @@ class ValidationService:
 
         return issues
 
+    def _validate_declared_keys(self, step: PipelineStep) -> list[ValidationIssue]:
+        issues: list[ValidationIssue] = []
+        declared_specs = [*step.inputs, *step.parameters, *step.outputs]
+
+        for spec in [*step.inputs, *step.parameters]:
+            if not spec.key or not spec.key.strip():
+                issues.append(
+                    ValidationIssue(
+                        severity="blocker",
+                        step_id=step.id,
+                        field="key",
+                        message="Input or parameter key cannot be empty or whitespace-only",
+                    )
+                )
+
+        for output in step.outputs:
+            if output.key and not output.key.strip():
+                issues.append(
+                    ValidationIssue(
+                        severity="blocker",
+                        step_id=step.id,
+                        field="key",
+                        message="Output key cannot be empty or whitespace-only when provided",
+                    )
+                )
+
+        key_counts = Counter(spec.key for spec in declared_specs if spec.key and spec.key.strip())
+        for key, count in key_counts.items():
+            if count > 1:
+                issues.append(
+                    ValidationIssue(
+                        severity="blocker",
+                        step_id=step.id,
+                        field=key,
+                        message=f"Duplicate declared key: {key}",
+                    )
+                )
+
+        return issues
+
     def _validate_value_spec(
         self,
         step_id: str,
         spec: ValueSpec,
         value: Any,
+        *,
+        kind: str,
     ) -> list[ValidationIssue]:
         issues: list[ValidationIssue] = []
 
-        if spec.required and not has_value(value):
-            return [
+        minimum_is_finite = spec.minimum is None or math.isfinite(spec.minimum)
+        maximum_is_finite = spec.maximum is None or math.isfinite(spec.maximum)
+        if not minimum_is_finite:
+            issues.append(
                 ValidationIssue(
                     severity="blocker",
                     step_id=step_id,
                     field=spec.key,
-                    message=f"Required parameter is missing: {spec.label or spec.key}",
+                    message=f"Minimum must be finite: {spec.label or spec.key}",
                 )
-            ]
+            )
+        if not maximum_is_finite:
+            issues.append(
+                ValidationIssue(
+                    severity="blocker",
+                    step_id=step_id,
+                    field=spec.key,
+                    message=f"Maximum must be finite: {spec.label or spec.key}",
+                )
+            )
+
+        if (
+            minimum_is_finite
+            and maximum_is_finite
+            and spec.minimum is not None
+            and spec.maximum is not None
+            and spec.minimum > spec.maximum
+        ):
+            issues.append(
+                ValidationIssue(
+                    severity="blocker",
+                    step_id=step_id,
+                    field=spec.key,
+                    message=f"Minimum cannot be greater than maximum: {spec.label or spec.key}",
+                )
+            )
+
+        if spec.required and not has_value(value):
+            issues.append(
+                ValidationIssue(
+                    severity="blocker",
+                    step_id=step_id,
+                    field=spec.key,
+                    message=f"Required {kind} is missing: {spec.label or spec.key}",
+                )
+            )
+            return issues
 
         if not has_value(value):
             return issues
 
         if spec.type in {"integer", "decimal"}:
-            try:
-                numeric = float(value)
-            except (TypeError, ValueError):
+            if isinstance(value, bool):
                 issues.append(
                     ValidationIssue(
                         severity="blocker",
                         step_id=step_id,
                         field=spec.key,
                         message=f"Value must be numeric: {spec.label or spec.key}",
+                    )
+                )
+                return issues
+            try:
+                numeric = float(value)
+            except (TypeError, ValueError, OverflowError):
+                issues.append(
+                    ValidationIssue(
+                        severity="blocker",
+                        step_id=step_id,
+                        field=spec.key,
+                        message=f"Value must be numeric: {spec.label or spec.key}",
+                    )
+                )
+                return issues
+
+            if not math.isfinite(numeric):
+                issues.append(
+                    ValidationIssue(
+                        severity="blocker",
+                        step_id=step_id,
+                        field=spec.key,
+                        message=f"Value must be finite: {spec.label or spec.key}",
                     )
                 )
                 return issues
@@ -339,7 +455,7 @@ class ValidationService:
                         message=f"Value must be an integer: {spec.label or spec.key}",
                     )
                 )
-            if spec.minimum is not None and numeric < spec.minimum:
+            if minimum_is_finite and spec.minimum is not None and numeric < spec.minimum:
                 issues.append(
                     ValidationIssue(
                         severity="blocker",
@@ -348,7 +464,7 @@ class ValidationService:
                         message=f"Value is below minimum {spec.minimum}: {spec.label or spec.key}",
                     )
                 )
-            if spec.maximum is not None and numeric > spec.maximum:
+            if maximum_is_finite and spec.maximum is not None and numeric > spec.maximum:
                 issues.append(
                     ValidationIssue(
                         severity="blocker",
@@ -365,6 +481,16 @@ class ValidationService:
                     step_id=step_id,
                     field=spec.key,
                     message=f"Invalid option for {spec.label or spec.key}: {value}",
+                )
+            )
+
+        if spec.type == "boolean" and type(value) is not bool:
+            issues.append(
+                ValidationIssue(
+                    severity="blocker",
+                    step_id=step_id,
+                    field=spec.key,
+                    message=f"Value must be a boolean: {spec.label or spec.key}",
                 )
             )
 
