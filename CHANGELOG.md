@@ -21,6 +21,7 @@ The format follows Keep a Changelog-style sections, and the project uses semanti
 - Blocked execution requests when requested steps or dependencies have blocker validation issues, and shell-quoted placeholder values before running commands.
 - Blocked unsafe pipeline working directories, inputs, and outputs from resolving outside the opened project, while keeping validation and execution aligned on their exact path values.
 - Updated locked Nano ID and PostCSS transitive dependencies to versions without the reported high-severity vulnerabilities.
+- Reconciled persisted step state after reloads, removed orphaned runtime data on pipeline imports, and kept source links valid when steps are renamed.
 
 ## 0.1.1 - 2026-05-18
 
