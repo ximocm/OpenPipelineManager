@@ -460,24 +460,26 @@ mod tests {
     #[test]
     fn backslash_names_stay_literal_on_posix() {
         let root = project("backslash");
+        let root_c = resolve_flexible(&root).unwrap();
         let resolved = resolve_pipeline_path(&root, "input\\file.txt", &root).unwrap();
         #[cfg(unix)]
-        assert_eq!(resolved, root.join("input\\file.txt"));
+        assert_eq!(resolved, root_c.join("input\\file.txt"));
         #[cfg(windows)]
-        assert_eq!(resolved, root.join("input").join("file.txt"));
+        assert_eq!(resolved, root_c.join("input").join("file.txt"));
         let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
     fn exact_text_preserved_including_padding() {
         let root = project("padding");
+        let root_c = resolve_flexible(&root).unwrap();
         let resolved = resolve_pipeline_path(&root, " input.txt ", &root).unwrap();
-        assert_eq!(resolved, root.join(" input.txt "));
+        assert_eq!(resolved, root_c.join(" input.txt "));
         // `.` componentes caen, `..` normaliza por lo que falta (probes Py 3.12).
         let resolved = resolve_pipeline_path(&root, "./x/./y", &root).unwrap();
-        assert_eq!(resolved, root.join("x").join("y"));
+        assert_eq!(resolved, root_c.join("x").join("y"));
         let resolved = resolve_pipeline_path(&root, "falta/../x", &root).unwrap();
-        assert_eq!(resolved, root.join("x"));
+        assert_eq!(resolved, root_c.join("x"));
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -535,14 +537,15 @@ mod tests {
     #[test]
     fn base_relative_resolution_from_a_working_directory() {
         let root = project("base-rel");
+        let root_c = resolve_flexible(&root).unwrap();
         let wd = resolve_flexible(&root.join("wd")).unwrap();
         assert_eq!(
             resolve_pipeline_path(&root, "../output/x", &wd).unwrap(),
-            root.join("output").join("x")
+            root_c.join("output").join("x")
         );
         assert_eq!(
             resolve_pipeline_path(&root, "local.txt", &wd).unwrap(),
-            root.join("wd").join("local.txt")
+            root_c.join("wd").join("local.txt")
         );
         let _ = fs::remove_dir_all(&root);
     }
@@ -553,7 +556,7 @@ mod tests {
         let resolved_root = resolve_flexible(&root).unwrap();
         assert_eq!(
             resolve_project_path(&root, " Input/x ").unwrap(),
-            root.join("Input").join("x")
+            resolved_root.join("Input").join("x")
         );
         assert_eq!(resolve_project_path(&root, "").unwrap(), resolved_root);
         assert_eq!(resolve_project_path(&root, "   ").unwrap(), resolved_root);

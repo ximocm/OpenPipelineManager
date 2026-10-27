@@ -249,7 +249,7 @@ fn find_posix_shell() -> Option<OsString> {
     ] {
         let path = std::path::Path::new(candidate);
         if path.exists() {
-            return Some(path.into_os_string());
+            return Some(path.as_os_str().to_os_string());
         }
     }
     None
