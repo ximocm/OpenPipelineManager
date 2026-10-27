@@ -1,59 +1,190 @@
 name: CI
 
 on:
-  push:
-    branches:
-      - main
-      - dev
   pull_request:
-    branches:
-      - main
-      - dev
-  workflow_dispatch:
+  push:
+    branches: [main]
+  workflow_call:
 
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_TARGET_DIR: ${{ github.workspace }}/target
+
 jobs:
-  backend-tests:
-    name: backend-tests
-    runs-on: ubuntu-latest
-
+  release-policy:
+    name: Release policy
+    runs-on: ubuntu-24.04
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v7
-
-      - name: Set up Python
-        uses: actions/setup-python@v7
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          python-version: "3.12"
+          persist-credentials: false
+      - run: python3 scripts/test_release.py
 
-      - name: Install backend dependencies
-        run: python -m pip install -r backend/requirements.txt
-
-      - name: Run backend tests
-        working-directory: backend
-        run: pytest
-
-  frontend-build:
-    name: frontend-build
-    runs-on: ubuntu-latest
-
+  test:
+    name: Core (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2022, macos-15]
+    runs-on: ${{ matrix.os }}
+    # La primera compilación de GTK4 con gvsbuild en Windows es larga y se
+    # espera que consuma buena parte del presupuesto; la caché la acorta.
+    timeout-minutes: 150
+    defaults:
+      run:
+        shell: bash
+    env:
+      # Proyectos gvsbuild de Windows; forma parte de la clave de su caché.
+      GVSBUILD_PROJECTS: gtk4 pkgconf
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v7
-
-      - name: Set up Node
-        uses: actions/setup-node@v7
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          node-version: "20.19.0"
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: stable
+      - name: Identify toolchain
+        id: rust
+        run: echo "version=$(rustc --version | cut -d ' ' -f 2)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        id: cache
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: rust-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust.outputs.version }}-${{ hashFiles('core/Cargo.lock', 'ui/Cargo.lock') }}
+          restore-keys: |
+            rust-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust.outputs.version }}-
+      - name: Install Linux desktop dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libgtk-4-dev pkg-config
+      - name: Test complete core on Linux
+        if: runner.os == 'Linux'
+        run: cargo test --locked --release --manifest-path core/Cargo.toml --workspace
+      - name: Test complete core on Windows and macOS
+        if: runner.os != 'Linux'
+        # opm-fs es portable: no hay watchers ni inotify, así que el workspace
+        # completo corre igual en las tres plataformas.
+        run: cargo test --locked --release --manifest-path core/Cargo.toml --workspace
+      - name: Test desktop logic on Linux
+        if: runner.os == 'Linux'
+        run: cargo test --locked --release --manifest-path ui/Cargo.toml
+      - name: Build Linux desktop
+        if: runner.os == 'Linux'
+        run: cargo build --locked --release --manifest-path ui/Cargo.toml
+      - name: Package Linux desktop
+        if: runner.os == 'Linux'
+        run: python3 scripts/package-linux.py
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: runner.os == 'Linux'
+        with:
+          name: linux-x86_64
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
+      - name: Install WiX on Windows
+        if: runner.os == 'Windows'
+        # WiX v6: soporte vigente (v5 dejó de soportarse 2026-02-05).
+        run: |
+          echo "$USERPROFILE\\.dotnet\\tools" >> "$GITHUB_PATH"
+          dotnet tool install --global wix --version 6.0.2
+      - name: Install gvsbuild on Windows
+        if: runner.os == 'Windows'
+        id: gvsbuild
+        run: |
+          python -m pip install --disable-pip-version-check gvsbuild
+          scripts="$(python -c "import sysconfig; print(sysconfig.get_path('scripts'))")"
+          echo "$scripts" >> "$GITHUB_PATH"
+          version="$(python -c "import importlib.metadata as m; print(m.version('gvsbuild'))")"
+          digest="$(printf '%s' "$GVSBUILD_PROJECTS" | sha256sum | cut -c1-16)"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "key=gvsbuild-windows-x86_64-$version-$digest" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        if: runner.os == 'Windows'
+        id: gtk_cache
+        with:
+          path: C:\gtk-build\gtk
+          key: ${{ steps.gvsbuild.outputs.key }}
+      - name: Build GTK4 with gvsbuild on Windows
+        if: runner.os == 'Windows' && steps.gtk_cache.outputs.cache-hit != 'true'
+        id: gtk_build
+        run: |
+          # README de gvsbuild: en los runners de Windows, MSYS2 por delante
+          # de Git Bash y --use-env para conservar ese PATH.
+          export PATH="/c/msys64/usr/bin:$PATH"
+          gvsbuild build --use-env $GVSBUILD_PROJECTS
+      - uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        if: ${{ !cancelled() && runner.os == 'Windows' && steps.gtk_cache.outputs.cache-hit != 'true' && steps.gtk_build.outcome == 'success' }}
+        with:
+          path: C:\gtk-build\gtk
+          key: ${{ steps.gvsbuild.outputs.key }}
+      - name: Configure GTK4 environment on Windows
+        if: runner.os == 'Windows'
+        run: |
+          echo "C:\\gtk-build\\gtk\\x64\\release\\bin" >> "$GITHUB_PATH"
+          echo "PKG_CONFIG_PATH=C:\\gtk-build\\gtk\\x64\\release\\lib\\pkgconfig" >> "$GITHUB_ENV"
+          # pkgconf recorta el -L de sus propios directorios de sistema y el
+          # prefijo de gvsbuild lo es: sin esta variable los -sys no emiten
+          # cargo:rustc-link-search y link.exe no encuentra gtk-4.lib
+          # (LNK1181).
+          echo "PKG_CONFIG_ALLOW_SYSTEM_LIBS=1" >> "$GITHUB_ENV"
+      - name: Build Windows desktop
+        if: runner.os == 'Windows'
+        run: cargo build --locked --release --manifest-path ui/Cargo.toml
+      - name: Package Windows desktop
+        if: runner.os == 'Windows'
+        run: python scripts/package-windows.py
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: runner.os == 'Windows'
+        with:
+          name: windows-x86_64
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
+      - name: Install macOS desktop dependencies
+        if: runner.os == 'macOS'
+        run: brew install gtk4 pkg-config
+      - name: Build macOS desktop
+        if: runner.os == 'macOS'
+        run: cargo build --locked --release --manifest-path ui/Cargo.toml
+      - name: Package macOS desktop
+        if: runner.os == 'macOS'
+        run: python3 scripts/package-macos.py
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: runner.os == 'macOS'
+        with:
+          name: macos-aarch64
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
+      - name: Save compiled dependencies even if tests fail
+        if: ${{ !cancelled() && steps.cache.outcome == 'success' && steps.cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ steps.cache.outputs.cache-primary-key }}
 
-      - name: Install frontend dependencies
-        working-directory: frontend
-        run: npm ci
-
-      - name: Build frontend
-        working-directory: frontend
-        run: npm run build
+  ci-success:
+    name: CI success
+    needs: [test, release-policy]
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require all platforms to pass
+        env:
+          RESULT: ${{ needs.test.result }}
+          POLICY_RESULT: ${{ needs.release-policy.result }}
+        run: test "$RESULT" = success && test "$POLICY_RESULT" = success

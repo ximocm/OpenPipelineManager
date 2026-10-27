@@ -85,3 +85,45 @@ Project uploads previously replaced existing files without warning. Closing dirt
 - Upload conflicts return HTTP 409 and leave existing content unchanged.
 - A conflicting upload batch is rejected before any of its files are written.
 - Destructive editor actions require an additional user acknowledgement when unsaved work is affected.
+
+## 2026-10-27 — Migrate OpenPipelineManager to the minmark stack (Rust + GTK4)
+
+**Status:** Accepted (supersedes the stack implications of the FastAPI/React implementation)
+
+### Context
+
+OPM shipped as a Python FastAPI backend plus a React/Vite frontend. The minmark project established the reference desktop stack: a Rust `core/` workspace plus a GTK4 `ui/` package, a cloned editor subsystem, and a multi-OS CI/release pipeline. We want OPM on that same stack, reusing minmark's editor (cloned) and inheriting a similar deployment pipeline. The Python/React implementation stays the behavior ground truth for the port.
+
+### Decision
+
+- OPM becomes a native desktop application: `core/` workspace (`opm-document`, `opm-parser`, `opm-theme`, `opm-fs`, `opm-pipeline`, `opm-exec`, `opm-store`) plus a `ui/` GTK4 package (binary `opm`, application id `app.opm`), version 0.2.0 tracked in the Cargo manifests.
+- The text editor is cloned and adapted from minmark's editor subsystem (`editor/`, `tabs/`, `menus/`, `explorer/`, `find.rs`) with per-file provenance headers. Markdown editing and Visual Mode are kept via a cloned parser; YAML/JSON/shell/FASTA syntax highlighting is new UI-owned lexers. minmark's HTML preview, PDF export, compositions, quick-open, project-wide search, and link/citation completion are not ported.
+- The persistence schema is unchanged: `.pipeline-manager/*` and `pipeline.project.json` keep the Python field names (`type`, `""` output keys, `{x, y}` layout entries, `exit_code`, `last_run_at`). A project created by the Python app opens, saves, and reopens without losing data or changing shapes. Exported pipelines keep the same JSON schema (`by_alias` field names).
+- Non-finite numeric values (NaN, ±inf): validation semantics are preserved exactly — rules 21/22/25 still produce blockers for such values arriving from YAML or constructed in memory. JSON files containing the non-standard `NaN`/`Infinity` tokens that Python's `json` module emitted now fail to parse with an error naming the file, instead of being silently accepted; OPM never writes those tokens.
+- Windows pipeline execution requires a POSIX shell (for example Git for Windows' bash). When none is found the engine refuses with a clear error before starting anything. There is no `cmd.exe` fallback: the placeholder quoting guarantee (single-argv substitution, injection safety) is POSIX-only.
+- The HTTP surface (REST endpoints, CSRF tokens, SSE streaming) is not ported; execution events flow over an in-process channel. Behavioral contracts are preserved: validation blockers prevent run preflight for the requested dependency closure, exactly as before.
+
+### Consequences
+
+- The pytest/npm quality gates are replaced by cargo gates plus `python3 scripts/test_release.py` (AGENTS.md and GITGUIDELINES.md updated accordingly).
+- `examples/` pipelines remain valid inputs; the pipeline schema itself is unchanged.
+- The FastAPI/React code is removed at cutover after behavioral parity verification; no compatibility shim remains.
+
+## 2026-10-27 — Documented safety and execution limitations
+
+**Status:** Accepted (documented limitations)
+
+### Context
+
+The security review of the ported core identified windows that remain after hardening the static-content cases (symlinked managed paths, hostile step ids, unsupported placeholder contexts). The remaining ones require a concurrent local actor mutating the project tree while an operation is in flight, or platform API gaps, or match the original execution semantics.
+
+### Decision
+
+- **Concurrent mutation is out of threat model.** OPM is a local-first, single-user desktop app: the project folder is trusted not to be mutated by another process during an operation. Hostile-but-static project content is in scope and rejected. The accepted windows are: ancestor directory swaps between an operation's validation and its use (e.g. import preflight → reservation) and raced-in destination files between existence checks and rename/move commits. Create uses exclusive creation; destinations present at validation time are never overwritten.
+- **Batch rollback file identity is Unix-only.** Rollback deletes only files the batch created; on Unix this is enforced by file identity (dev/inode). On Windows the identity API is unavailable, so rollback verifies only that the entry is still a non-symlink regular file.
+- **Termination targets the immediate child only.** `stop()` terminates the shell process running the step, matching the original `Popen.terminate()` semantics; descendant processes of that shell can survive. Process-group termination is future work.
+
+### Consequences
+
+- Shared project folders mutated concurrently by other users or processes during an operation are unsupported.
+- A future hardening path for the concurrency windows is directory-handle-relative, no-follow filesystem operations (openat-style APIs).

@@ -1,0 +1,78 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag on main (for example v0.2.0)'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      sha: ${{ steps.version.outputs.sha }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Validate tag, source and version
+        id: version
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          python3 scripts/validate-release.py "$RELEASE_TAG"
+
+  # The reusable workflow checks out the triggering ref. Manual reruns must
+  # select the same tag in the Actions UI, which validate-release.py enforces.
+  checks:
+    needs: validate
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
+  publish:
+    needs: [validate, checks]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      # Cada job de plataforma publica su paquete y su línea en SHA256SUMS.
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          path: artifacts
+      - name: Verify checksums and create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+          RELEASE_SHA: ${{ needs.validate.outputs.sha }}
+        run: |
+          mkdir dist
+          for platform in linux-x86_64 windows-x86_64 macos-aarch64; do
+            find "artifacts/$platform" -maxdepth 1 -type f ! -name SHA256SUMS \
+              -exec mv {} dist/ \;
+            cat "artifacts/$platform/SHA256SUMS" >> dist/SHA256SUMS
+          done
+          cd dist
+          sha256sum --check SHA256SUMS
+          # Never overwrite an existing release or its assets on a rerun.
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "Release already exists; review it manually before retrying."
+            exit 1
+          fi
+          gh release create "$RELEASE_TAG" ./* \
+            --verify-tag --target "$RELEASE_SHA" --draft \
+            --title "opm $RELEASE_TAG" --generate-notes

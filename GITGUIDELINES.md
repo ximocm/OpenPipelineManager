@@ -13,27 +13,20 @@ This repository is public, so the default workflow should favor reviewable chang
 
 ## Required Checks
 
-Run the relevant test suite before opening a pull request and again before merging if the branch changed.
-
-Backend:
+Run the relevant test suite before opening a pull request and again before merging if the branch changed. All commands run from the repository root:
 
 ```bash
-cd backend
-pytest
-```
-
-Frontend:
-
-```bash
-cd frontend
-npm run build
+cargo test --locked --manifest-path core/Cargo.toml --workspace
+cargo test --locked --manifest-path ui/Cargo.toml
+cargo build --locked --release --manifest-path ui/Cargo.toml
+python3 scripts/test_release.py
 ```
 
 Every pull request must list the commands that were run. If a check cannot run, document the blocker clearly.
 
 ## Version And Changelog Policy
 
-The current project version is tracked in `VERSION`. Frontend package releases must keep `frontend/package.json` and `frontend/package-lock.json` aligned with that version.
+The project version is tracked in the Cargo manifests: `core/Cargo.toml` under `[workspace.package]` and `ui/Cargo.toml` under `[package]`. Both values must be identical, the release workflow rejects any tag that does not match both (`scripts/validate-release.py`), and these manifests are the authoritative version source.
 
 Update `CHANGELOG.md` for:
 
@@ -61,7 +54,7 @@ Use concise imperative messages. Conventional Commit prefixes are preferred:
 - `docs: document release workflow`
 - `chore: update dependency metadata`
 
-Keep commits focused. If a commit mixes unrelated backend, frontend, and documentation changes, split it before review when practical.
+Keep commits focused. If a commit mixes unrelated core, ui, and documentation changes, split it before review when practical.
 
 ## Pull Requests
 
@@ -80,7 +73,7 @@ Merge only after CI is green and review comments are resolved.
 Configure `main` with a branch protection rule or repository ruleset:
 
 - require pull requests before merging,
-- require the CI checks `backend-tests` and `frontend-build`,
+- require the CI check `CI success` (the aggregator over the test matrix and release policy),
 - require branches to be up to date before merging,
 - require conversation resolution,
 - require linear history,

@@ -4,26 +4,19 @@
 
 Open Pipeline Manager is a local application for creating, importing, editing, validating, and running pipelines. A pipeline is a list of steps. Each step can declare a command, input files or folders, output paths, configurable options, dependencies, and an execution environment.
 
-The app is local-first: pipeline commands run on the machine where the backend is running. Treat imported pipelines as executable code.
+The app is local-first: pipeline commands run on the local machine. Treat imported pipelines as executable code.
 
 ## 2. Starting the Application
 
-Start the backend:
+Launch the desktop application:
 
 ```bash
-cd backend
-source .venv/bin/activate
-uvicorn app.main:app --reload
+cargo run --locked --manifest-path ui/Cargo.toml
 ```
 
-Start the frontend:
-
-```bash
-cd frontend
-npm run dev
-```
-
-Open the frontend URL shown by Vite, usually `http://localhost:5173`.
+or run a built binary directly, for example `./target/release/opm`. Per-OS
+prerequisites are documented in `BUILDING.md`. On Windows, running pipelines
+additionally requires a POSIX shell (Git for Windows provides bash).
 
 ## 3. Projects
 
@@ -133,7 +126,7 @@ outputs:
     path: work/normalized/data.csv
 ```
 
-The canvas shows solid lines for pipeline order and dashed lines for output-to-input links.
+The canvas draws three link types: straight gray lines for pipeline order, dashed teal lines for output-to-input links, and solid lines for explicit dependencies (selectable; Delete removes the dependency).
 
 ## 8. Options and Selectors
 
@@ -150,7 +143,7 @@ parameters:
       - accurate
 ```
 
-The backend normalizes `selector` to `select`.
+The app normalizes `selector` to `select`.
 
 ## 9. Validation
 
@@ -199,3 +192,4 @@ A step is considered `ok` only when its `.done` marker exists and all declared o
 - If a step finishes but is marked error, check whether every declared output path was created.
 - If PNG/FASTA/text files do not open, double click them in the explorer to open a center tab.
 - If execution hangs, inspect `.pipeline-manager/logs/<step-id>.log`.
+- On Windows, if running a step reports that no POSIX shell is available, install Git for Windows (bash) and reopen the app.

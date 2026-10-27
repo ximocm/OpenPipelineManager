@@ -1,0 +1,21 @@
+[workspace]
+resolver = "2"
+members = ["opm-*"]
+
+[workspace.package]
+version = "0.2.0"
+edition = "2021"
+
+[workspace.dependencies]
+opm-document = { path = "opm-document" }
+opm-parser = { path = "opm-parser" }
+opm-theme = { path = "opm-theme" }
+opm-fs = { path = "opm-fs" }
+opm-pipeline = { path = "opm-pipeline" }
+opm-exec = { path = "opm-exec" }
+opm-store = { path = "opm-store" }
+
+pulldown-cmark = { version = "0.12", default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yml = "0.0.12"

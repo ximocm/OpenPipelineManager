@@ -1,0 +1,25 @@
+[package]
+name = "opm-ui"
+version = "0.2.0"
+edition = "2021"
+license = "LicenseRef-Attribution-NonCommercial"
+description = "Open Pipeline Manager — UI GTK4 (binario `opm`)"
+
+[[bin]]
+name = "opm"
+path = "src/main.rs"
+
+[dependencies]
+# `v4_10`: `gtk::FileDialog` y `gtk::AlertDialog` están tras esa feature
+# (el runtime objetivo es GTK >= 4.10; ver BUILDING.md).
+gtk4 = { version = "0.9", features = ["v4_10"] }
+opm-document = { path = "../core/opm-document" }
+opm-parser = { path = "../core/opm-parser" }
+opm-theme = { path = "../core/opm-theme" }
+opm-fs = { path = "../core/opm-fs" }
+opm-pipeline = { path = "../core/opm-pipeline" }
+opm-store = { path = "../core/opm-store" }
+opm-exec = { path = "../core/opm-exec" }
+
+# Estado de la UI en el directorio de configuración por SO (§11 A13).
+directories = "6"

@@ -2,54 +2,54 @@
 
 ## Project Structure & Module Organization
 
-This repository implements the MVP described in `Prompt.md`: a local-first visual pipeline manager with a FastAPI backend and React/Vite frontend.
+This repository implements Open Pipeline Manager as a native desktop application: a Rust `core/` workspace plus a GTK4 `ui/` package with the `opm` binary, as decided in `DECISIONS.md`.
 
-- `backend/app/`: FastAPI application code.
-- `backend/app/api/`: REST and SSE endpoints.
-- `backend/app/models/`: Pydantic schemas for projects, pipeline steps, parameters, validation, and execution state.
-- `backend/app/services/`: parsing, validation, command building, persistence, logs, and execution orchestration.
-- `backend/tests/`: pytest coverage for parser, validation, state detection, and execution ordering.
-- `frontend/src/`: React + TypeScript app.
-- `frontend/src/features/`: feature folders such as `project-tree/`, `pipeline-canvas/`, `step-panel/`, and `logs-panel/`.
+- `core/`: cargo workspace (resolver 2) with the `opm-document`, `opm-parser`, `opm-theme`, `opm-fs`, `opm-pipeline`, `opm-exec`, and `opm-store` crates: document model, Markdown parsing, theme, filesystem and project operations, pipeline model and validation rules, execution engine, and persistence.
+- `ui/`: GTK4 package `opm-ui` with the `opm` binary: editor subsystem (editor, tabs, menus, explorer, find), pipeline canvas and step dialogs, runs/logs and validation panels, project dialogs.
+- `scripts/`: release validation and packaging: `validate-release.py`, `test_release.py`, `package-linux.py`, `package-windows.py`, and `package-macos.py`.
+- `.github/workflows/`: `ci.yml`, `release.yml`, and the `main` → `dev` sync workflow.
+- `docs/`: `CI.md` and `PUBLISHING.md` for the release process.
+- Root documents: `README.md`, `MANUAL.md`, `BUILDING.md`, `CHANGELOG.md`, `DECISIONS.md`, `AGENTS.md`, `GITGUIDELINES.md`, `LICENSE`, `NOTICE`, and `THIRD_PARTY_NOTICES.md`.
 - `examples/`: sample `pipeline.yml` and `pipeline.json` files.
 
 Keep generated runtime data in `.pipeline-manager/` inside user projects, not in source directories.
 
 ## Build, Test, and Development Commands
 
-Backend setup and run:
+Run every command from the repository root. There is no cargo workspace at the root, so always pass `--manifest-path`.
+
+Build the release binary:
 
 ```bash
-cd backend
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-pytest
-uvicorn app.main:app --reload
+cargo build --locked --release --manifest-path ui/Cargo.toml
 ```
 
-Frontend setup and run:
+Test and validate:
 
 ```bash
-cd frontend
-npm install
-npm run dev
+cargo test --locked --manifest-path core/Cargo.toml --workspace
+cargo test --locked --manifest-path ui/Cargo.toml
+python3 scripts/test_release.py
 ```
 
-Use `pytest` for backend tests and the frontend package scripts for linting, formatting, and tests once `package.json` exists.
+Run in development:
+
+```bash
+cargo run --locked --manifest-path ui/Cargo.toml
+cargo run --locked --manifest-path ui/Cargo.toml -- path/to/project
+```
+
+Use the cargo test commands for the Rust crates and `python3 scripts/test_release.py` for release-tag and packaging rules. `BUILDING.md` documents prerequisites per operating system; `docs/CI.md` documents the CI matrix.
 
 ## Required Quality Gate
 
 Always run the relevant tests before handing work back, opening a pull request, or merging. At minimum:
 
 ```bash
-cd backend
-pytest
-```
-
-```bash
-cd frontend
-npm run build
+cargo test --locked --manifest-path core/Cargo.toml --workspace
+cargo test --locked --manifest-path ui/Cargo.toml
+cargo build --locked --release --manifest-path ui/Cargo.toml
+python3 scripts/test_release.py
 ```
 
 If a command cannot run because dependencies, credentials, or local services are missing, state the exact blocker and do not present the change as verified.
@@ -58,15 +58,15 @@ For public release, user-visible behavior, API/schema, dependency, or security c
 
 ## Coding Style & Naming Conventions
 
-Use Python 3.12+ with type hints and Pydantic models for structured data. Prefer small service modules with explicit responsibilities. Use `snake_case` for Python files, functions, variables, and test names.
+Use Rust (edition 2021) with the conventions already established in the workspace. Prefer small modules with explicit responsibilities. Use `snake_case` for files, functions, variables, and test names, and keep tests next to the code they cover.
 
-Use React with TypeScript for the frontend. Name components in `PascalCase`, hooks as `useThing`, and feature directories in kebab case. Keep API types in `frontend/src/types/` or next to the feature that owns them.
+Files cloned and adapted from minmark keep their provenance header; modifications stay under the Open Pipeline Manager contributors' copyright. Follow the GTK4 patterns already present in `ui/src` for widgets, dialogs, and event handling.
 
 ## Testing Guidelines
 
-Required backend tests include YAML/JSON parsing, duplicate IDs, missing dependencies, cycles, placeholder validation, required inputs, parameter ranges, invalid select options, `.done` plus output state detection, and dependency-aware execution ordering.
+Required coverage includes YAML/JSON parsing, duplicate IDs, missing dependencies, cycles, placeholder validation, required inputs, parameter ranges, invalid select options, `.done` plus output state detection, dependency-aware execution ordering, execution quoting and injection safety, and project-tree safeguards. The ported test contracts live in the `core/` crates.
 
-Name backend tests `test_<behavior>.py`. Keep fixtures small and prefer example pipeline files under `examples/` when they are useful across tests.
+Name Rust tests after the behavior they cover. Keep fixtures small and prefer example pipeline files under `examples/` when they are useful across tests. Release-tag and packaging rules are covered by `python3 scripts/test_release.py`.
 
 ## Commit & Pull Request Guidelines
 

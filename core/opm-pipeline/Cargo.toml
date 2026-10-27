@@ -1,0 +1,12 @@
+[package]
+name = "opm-pipeline"
+version.workspace = true
+edition.workspace = true
+license = "LicenseRef-Attribution-NonCommercial"
+description = "Modelo de pipeline de OPM: modelo, parseo YAML/JSON y validación (29 reglas)"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+serde_yml.workspace = true
+opm-fs = { workspace = true }

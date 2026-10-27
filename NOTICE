@@ -1,0 +1,21 @@
+Open Pipeline Manager
+Copyright (c) 2026 Open Pipeline Manager contributors
+
+This product includes software developed from the minmark project
+(https://github.com/ximocm/minmark), Copyright (c) 2026 ximocm, made available
+under the Apache License, Version 2.0. You may obtain a copy of that license in
+the file third-party/minmark-Apache-2.0.txt distributed with this product and
+in the minmark source repository.
+
+Cloned and adapted from minmark (Apache-2.0):
+- core/opm-document, core/opm-parser, core/opm-theme, core/opm-fs (core crates)
+- the ui/src editor, tabs, menus, explorer, find and list_scroll subsystems
+Modified files carry a provenance header. Modifications are
+Copyright (c) 2026 Open Pipeline Manager contributors.
+
+Unless required by applicable law or agreed to in writing, software distributed
+under the Apache License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES
+OR CONDITIONS OF ANY KIND, either express or implied. See the Apache License for
+the specific language governing permissions and limitations under it.
+
+Third-party dependency notices: see THIRD_PARTY_NOTICES.md.
