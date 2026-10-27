@@ -952,6 +952,7 @@ fn assert_managed_path_error(text: &str) {
 /// F2 (escenario 2): `.pipeline-manager/logs/a.log` enlazado a un fichero
 /// de usuario — preflight con error claro, sinks que jamás siguen el
 /// enlace y cero escrituras fuera del proyecto.
+#[cfg(unix)]
 #[test]
 fn symlinked_log_artifact_is_never_followed() {
     let (parent, store) = open_store("log-symlink");
@@ -975,6 +976,7 @@ fn symlinked_log_artifact_is_never_followed() {
 
 /// F2 (escenario 3): JSON de runtime con enlace colgante hacia fuera —
 /// guardar y cargar fallan con error claro y NUNCA crean el fichero de fuera.
+#[cfg(unix)]
 #[test]
 fn dangling_symlink_runtime_json_fails_load_and_save() {
     let (parent, store) = open_store("dangling-json");
@@ -1060,6 +1062,7 @@ fn imported_separator_ids_produce_blockers_at_import() {
 /// F2/F3 (prune): `.pipeline-manager/logs` enlazado hacia fuera con un
 /// `.log` de fuera dentro — el import de reemplazo NO borra nada fuera y el
 /// propio import falla con error claro.
+#[cfg(unix)]
 #[test]
 fn prune_never_deletes_through_a_symlinked_logs_dir() {
     let (parent, store) = open_store("prune-symlink");

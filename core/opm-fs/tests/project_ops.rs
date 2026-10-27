@@ -563,6 +563,21 @@ fn import_accepts_case_distinct_destinations_on_sensitive_branch() {
     let (dir, root) = project("import-case-ok");
     let src = TestDir::new("import-case-ok-src");
 
+    // Skip donde el FS real es case-insensitive (APFS/NTFS): crear
+    // report.txt y REPORT.txt colisiona físicamente. La rama sensible del
+    // folding queda pinzada por el test unitario de `destinations_conflict`.
+    let probe_a = src.path().join("case-probe.txt");
+    let probe_b = src.path().join("CASE-PROBE.TXT");
+    if fs::write(&probe_a, "a").is_err() {
+        return;
+    }
+    if fs::write(&probe_b, "b").is_err()
+        || fs::read_to_string(&probe_a).unwrap_or_default() != "a"
+    {
+        eprintln!("skip: filesystem case-insensitive");
+        return;
+    }
+
     opm_fs::force_case_insensitive_destinations(Some(false));
     let created = import_files(
         &root,
@@ -857,7 +872,11 @@ fn list_tree_children_rejects_non_utf8_names() {
     let dir = TestDir::new("lazy-tree-utf8");
     let root = fs::canonicalize(dir.path()).unwrap();
     let bad = root.join(std::ffi::OsStr::from_bytes(b"bad-\xff.txt"));
-    fs::write(&bad, "x").unwrap();
+    if fs::write(&bad, "x").is_err() {
+        // APFS y otros filesystems rechazan nombres que no son UTF-8.
+        eprintln!("skip: el filesystem rechaza nombres no UTF-8");
+        return;
+    }
 
     let error = list_tree_children(&root, &root).unwrap_err();
     assert!(matches!(error, OpsError::NotUtf8 { .. }), "{error:?}");
