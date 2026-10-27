@@ -5,14 +5,12 @@
 </p>
 
 <p align="center">
-  <img alt="Python" src="https://img.shields.io/badge/Python-3.12%2B-3776AB">
-  <img alt="FastAPI" src="https://img.shields.io/badge/FastAPI-backend-009688">
-  <img alt="React" src="https://img.shields.io/badge/React-18-61DAFB">
-  <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-5-3178C6">
+  <img alt="Rust" src="https://img.shields.io/badge/Rust-stable-000000">
+  <img alt="GTK4" src="https://img.shields.io/badge/GTK4-native%20desktop-76548F">
   <img alt="License" src="https://img.shields.io/badge/License-Attribution%20Non--Commercial-blue">
 </p>
 
-Open Pipeline Manager helps you turn shell-based workflows into visible, editable pipeline projects. It provides a VS Code-style project explorer, a connected step canvas, structured inputs/options/outputs, validation, execution controls, and live logs while keeping all runtime state inside the opened project folder.
+Open Pipeline Manager helps you turn shell-based workflows into visible, editable pipeline projects. It is a native desktop application built on the [minmark](https://github.com/ximocm/minmark) stack: a Rust core workspace plus a GTK4 user interface that embeds minmark's editor (cloned and adapted). It provides a VS Code-style project explorer, a connected step canvas, structured inputs/options/outputs, validation, execution controls, and live logs while keeping all runtime state inside the opened project folder.
 
 ## Contents
 
@@ -29,10 +27,10 @@ Open Pipeline Manager helps you turn shell-based workflows into visible, editabl
 
 ## Features
 
-- Visual pipeline canvas with ordered step links and output-to-input links.
-- Project explorer with create, upload, rename, delete, move, and file tabs, including safeguards against silent overwrites and unsaved-edit loss.
-- Text, FASTA, YAML, JSON, shell, and image viewing/editing where applicable.
-- Step editor for command, environment, working directory, inputs, outputs, options, and dependencies.
+- Visual pipeline canvas with ordered step links, output-to-input links, and editable dependency links.
+- Project explorer with create, upload, rename, delete, drag-and-drop move, a Refresh action, and file tabs, including safeguards against silent overwrites and unsaved-edit loss.
+- Text editor cloned from minmark: tabbed documents with dirty-state guards, find/replace, markdown editing with Visual Mode, and syntax highlighting for YAML, JSON, shell, and FASTA files; image files open in a viewer.
+- Step editor for command, environment, working directory, inputs, outputs, and options; dependencies are edited directly on the canvas.
 - Pipeline variable insertion, for example `INPUT_FILE={input_file}`.
 - Selector options with predefined values.
 - Runtime validation before execution.
@@ -41,25 +39,18 @@ Open Pipeline Manager helps you turn shell-based workflows into visible, editabl
 
 ## Quick Start
 
-Start the backend:
+Prerequisites: a Rust stable toolchain and GTK 4.10 development files. See [BUILDING.md](BUILDING.md) for per-OS instructions (Linux, Windows, macOS).
 
 ```bash
-cd backend
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-uvicorn app.main:app --reload
+cargo build --locked --release --manifest-path ui/Cargo.toml
+./target/release/opm
 ```
 
-Start the frontend:
+For development builds:
 
 ```bash
-cd frontend
-npm install
-npm run dev
+cargo run --locked --manifest-path ui/Cargo.toml
 ```
-
-Open the Vite URL shown in the terminal, usually `http://localhost:5173`.
 
 ## How It Works
 
@@ -153,22 +144,23 @@ Blockers should be fixed before running. Warnings indicate incomplete or risky c
 
 ## Project Structure
 
+Source layout (a Rust `core/` workspace plus a GTK4 `ui/` package, mirroring the minmark stack):
+
 ```text
-backend/
-  app/
-    api/          FastAPI routes
-    models/       Pydantic schemas
-    services/     parsing, validation, storage, execution, file tree
-  tests/          pytest suite
-frontend/
-  src/
-    api/          HTTP client
-    features/     project tree, canvas, step panel, logs panel
-    types/        shared TypeScript types
+core/
+  opm-document/   text buffer, undo/redo, search model (cloned from minmark)
+  opm-parser/     markdown parsing and highlighting (cloned from minmark)
+  opm-theme/      color palette (vendored from minmark)
+  opm-fs/         file store, atomic writes, project tree and file operations
+  opm-pipeline/   pipeline model, YAML/JSON parsing, validation
+  opm-exec/       execution engine with logs, statuses, and .done markers
+  opm-store/      project persistence and runtime state
+ui/
+  src/            GTK4 application: editor, tabs, explorer, canvas, step panel,
+                  run controls, logs (bin: opm)
+scripts/          multi-OS packaging and release validation
+docs/             CI, publishing, and architecture decision records
 examples/         sample pipeline definitions
-MANUAL.md         full user and developer manual
-THIRD_PARTY_NOTICES.md direct dependency attribution checklist
-LICENSE           custom attribution non-commercial license
 ```
 
 Opened projects use this structure:
@@ -192,24 +184,31 @@ ProjectFolder/
 
 ## Development
 
-Backend checks:
+Core tests:
 
 ```bash
-cd backend
-source .venv/bin/activate
-pytest
+cargo test --locked --manifest-path core/Cargo.toml --workspace
 ```
 
-Frontend checks:
+UI tests and build:
 
 ```bash
-cd frontend
-npm run build
+cargo test --locked --manifest-path ui/Cargo.toml
+cargo build --locked --release --manifest-path ui/Cargo.toml
+```
+
+Release policy checks:
+
+```bash
+python3 scripts/test_release.py
 ```
 
 ## Documentation
 
 - [Manual](MANUAL.md): full usage guide, pipeline authoring, validation, and troubleshooting.
+- [Building](BUILDING.md): per-OS prerequisites, build, run, and local packaging.
+- [CI](docs/CI.md): CI/release workflows and how to cut a release.
+- [Publishing](docs/PUBLISHING.md): packaged artifacts and maintainer notes.
 - [Examples](examples/): runnable YAML and JSON pipeline definitions.
 - [Git Guidelines](GITGUIDELINES.md): branch, test, changelog, release, and repository protection policy.
 - [Changelog](CHANGELOG.md): notable changes by version.
@@ -217,14 +216,14 @@ npm run build
 
 ## Versioning
 
-The current project version is tracked in [VERSION](VERSION). User-visible releases should update `VERSION`, `CHANGELOG.md`, and package manifests such as `frontend/package.json` when applicable.
+The project version is tracked in the Cargo manifests: `core/Cargo.toml` (`workspace.package.version`) and `ui/Cargo.toml` (`package.version`), which must match. User-visible releases should update both manifests and `CHANGELOG.md`; `scripts/validate-release.py` enforces the pairing against the release tag.
 
 ## Security
 
-Pipeline commands execute locally through the backend. Only import and run pipeline files you trust. Do not commit secrets, `.env` files, local project runtime state, or machine-specific absolute paths.
+Pipeline commands execute locally. Only import and run pipeline files you trust. Do not commit secrets, `.env` files, local project runtime state, or machine-specific absolute paths.
 
 ## License
 
 Open Pipeline Manager is distributed under the custom [Attribution Non-Commercial License](LICENSE). Non-commercial use is permitted with attribution. Commercial use requires explicit permission from the copyright holder.
 
-Third-party dependency notices are tracked in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+Portions of the editor and core are cloned and adapted from [minmark](https://github.com/ximocm/minmark), © ximocm, licensed under Apache-2.0 (see [NOTICE](NOTICE) and `third-party/minmark-Apache-2.0.txt`). Third-party dependency notices are tracked in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

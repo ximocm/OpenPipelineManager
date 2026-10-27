@@ -1,0 +1,8 @@
+[package]
+name = "opm-theme"
+version.workspace = true
+edition.workspace = true
+license = "Apache-2.0"
+description = "Theme palette and CSS variable generation for Open Pipeline Manager"
+
+[dependencies]

@@ -1,0 +1,9 @@
+[build]
+target-dir = "target"
+
+[profile.dev]
+debug = 0
+incremental = false
+
+[profile.release]
+strip = "symbols"
