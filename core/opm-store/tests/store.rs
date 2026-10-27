@@ -141,7 +141,7 @@ fn python_serialized_project_round_trips_fields() {
     {{ "severity": "warning", "message": "w", "step_id": "a", "field": null }}
   ]
 }}"#,
-            root = root.display()
+            root = root.display().to_string().replace('\\', r"\\")
         ),
     )
     .expect("write snapshot");

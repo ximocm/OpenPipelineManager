@@ -15,6 +15,7 @@ import platform
 import plistlib
 import shutil
 import subprocess
+import time
 import tarfile
 import tempfile
 import time
@@ -274,9 +275,19 @@ def build_dmg(stage, dist, name, version):
             else:
                 shutil.copy2(item, target)
         os.symlink("/Applications", root / "Applications")
-        run(["hdiutil", "create", "-volname", f"opm {version}",
-             "-srcfolder", str(root), "-ov", "-format", "UDZO",
-             str(dist / f"{name}.dmg")])
+        command = ["hdiutil", "create", "-volname", f"opm {version}",
+                   "-srcfolder", str(root), "-ov", "-format", "UDZO",
+                   str(dist / f"{name}.dmg")]
+        # hdiutil puede fallar de forma transitoria con "Resource busy" en
+        # runners ocupados: reintentos acotados antes de rendirse.
+        for attempt in range(3):
+            try:
+                run(command)
+                break
+            except SystemExit:
+                if attempt == 2:
+                    raise
+                time.sleep(2 + 3 * attempt)
 
 
 def main():
