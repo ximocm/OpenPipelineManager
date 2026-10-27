@@ -9,10 +9,13 @@ mod common;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
+#[cfg(unix)]
 use std::time::{Duration, Instant};
 
 use common::temp_dir;
-use opm_exec::{ExecError, ExecEvent, ExecutionManager, StepState, StepStatus};
+use opm_exec::{ExecError, ExecutionManager};
+#[cfg(unix)]
+use opm_exec::{ExecEvent, StepState, StepStatus};
 use opm_pipeline::{FieldType, IssueSeverity, OutputSpec, PipelineStep, Value, ValueSpec};
 use opm_store::{ProjectStore, ValueMap};
 
@@ -38,6 +41,7 @@ fn import_json(store: &ProjectStore, steps: &str) {
 }
 
 /// Collect events until `done` matches (or panic with what arrived).
+#[cfg(unix)]
 fn collect_until(
     manager: &ExecutionManager,
     timeout: Duration,
@@ -61,12 +65,14 @@ fn collect_until(
     }
 }
 
+#[cfg(unix)]
 fn collect_finished(manager: &ExecutionManager) -> Vec<ExecEvent> {
     collect_until(manager, Duration::from_secs(15), |event| {
         matches!(event, ExecEvent::ExecutionFinished)
     })
 }
 
+#[cfg(unix)]
 fn started_ids(events: &[ExecEvent]) -> Vec<String> {
     events
         .iter()
@@ -77,6 +83,7 @@ fn started_ids(events: &[ExecEvent]) -> Vec<String> {
         .collect()
 }
 
+#[cfg(unix)]
 fn finished_state<'a>(events: &'a [ExecEvent], step_id: &str) -> Option<&'a StepState> {
     events.iter().find_map(|event| match event {
         ExecEvent::StepFinished {

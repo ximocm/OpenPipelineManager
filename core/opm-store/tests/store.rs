@@ -942,6 +942,7 @@ fn export_pipeline_writes_by_alias_json() {
 /// Un error de ruta gestionada es visible y claro: contención («outside…»,
 /// el enlace apunta fuera) o componente-symlink («symbolic link», apunta
 /// dentro) — nunca se sigue el enlace.
+#[cfg(unix)]
 fn assert_managed_path_error(text: &str) {
     assert!(
         text.contains("symbolic link") || text.contains("outside the current project"),

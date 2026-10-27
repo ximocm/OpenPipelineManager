@@ -140,7 +140,7 @@ pub fn resolve_pipeline_path(
             path: raw.to_owned(),
         });
     }
-    Ok(resolved)
+    Ok(rebase_onto(&resolved, &project_root))
 }
 
 /// Resuelve `requested` contra la raíz del proyecto (conveniencia raíz-relative
@@ -243,6 +243,10 @@ pub fn relative_project_path(
             path: target.display().to_string(),
         });
     }
+    // Misma forma para ambos lados antes de calcular el relativo: un lado
+    // puede haber cruzado un symlink (forma plana) y el otro no (verbatim).
+    let from = rebase_onto(&from, &project_root);
+    let target = rebase_onto(&target, &project_root);
     relpath(&target, &from).ok_or_else(|| PathError::NotRelative {
         path: target.display().to_string(),
     })
@@ -334,8 +338,42 @@ fn steps_of(path: &Path) -> Vec<Step> {
 
 /// ¿Está `path` dentro (o igual a) `root`? Ambas rutas ya resueltas: la
 /// comparación es por componentes y caza symlinks que escapan.
+/// Contención independiente de la forma del prefijo: en Windows
+/// `fs::canonicalize` produce rutas verbatim (`\\?\C:\…`) mientras que
+/// `read_link` devuelve targets en forma plana (`C:\…`), y comparar formas
+/// distintas da falsos «fuera del proyecto» en symlinks legítimos.
 fn is_inside(path: &Path, root: &Path) -> bool {
-    path == root || path.starts_with(root)
+    let path = strip_verbatim(path);
+    let root = strip_verbatim(root);
+    path == root || path.starts_with(&root)
+}
+
+/// Elimina el prefijo verbatim de Windows (`\\?\` / `\\?\UNC\`) solo para
+/// comparar; en el resto de plataformas es la identidad.
+fn strip_verbatim(path: &Path) -> std::borrow::Cow<'_, Path> {
+    #[cfg(windows)]
+    {
+        if let Some(rest) = path.to_str().and_then(|text| {
+            text.strip_prefix(r"\\?\UNC\")
+                .map(|rest| format!(r"\\{rest}"))
+                .or_else(|| text.strip_prefix(r"\\?\").map(str::to_owned))
+        }) {
+            return std::borrow::Cow::Owned(PathBuf::from(rest));
+        }
+    }
+    let _ = path;
+    std::borrow::Cow::Borrowed(path)
+}
+
+/// Reexpresa `resolved` con la MISMA forma que `project_root` (mismo camino
+/// físico) para que los llamadores no mezclen formas al comparar rutas.
+fn rebase_onto(resolved: &Path, project_root: &Path) -> PathBuf {
+    let stripped_resolved = strip_verbatim(resolved);
+    let stripped_root = strip_verbatim(project_root);
+    if let Ok(suffix) = stripped_resolved.strip_prefix(&stripped_root) {
+        return project_root.join(suffix);
+    }
+    resolved.to_path_buf()
 }
 
 /// Port de `_is_absolute_path`: absoluto POSIX **o** cualquier forma de
