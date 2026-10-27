@@ -912,13 +912,19 @@ function joinFilesystemPath(parentPath: string, childName: string): string {
 }
 
 function replacePathPrefix(path: string, oldPrefix: string, newPrefix: string): string | null {
-  if (path === oldPrefix) return newPrefix;
-  if (path.startsWith(`${oldPrefix}/`)) return `${newPrefix}${path.slice(oldPrefix.length)}`;
+  // Replacing "\" with "/" is 1:1 per character, so slicing the original
+  // path at oldPrefix.length stays aligned with the normalized comparison.
+  const normalizedPath = path.replace(/\\/g, '/');
+  const normalizedOldPrefix = oldPrefix.replace(/\\/g, '/');
+  if (normalizedPath === normalizedOldPrefix) return newPrefix;
+  if (normalizedPath.startsWith(`${normalizedOldPrefix}/`)) return `${newPrefix}${path.slice(oldPrefix.length)}`;
   return null;
 }
 
 function isPathOrDescendant(path: string, parentPath: string): boolean {
-  return path === parentPath || path.startsWith(`${parentPath}/`);
+  const normalizedPath = path.replace(/\\/g, '/');
+  const normalizedParentPath = parentPath.replace(/\\/g, '/');
+  return normalizedPath === normalizedParentPath || normalizedPath.startsWith(`${normalizedParentPath}/`);
 }
 
 function fileTabId(path: string): string {
