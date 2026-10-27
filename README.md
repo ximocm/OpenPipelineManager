@@ -30,7 +30,7 @@ Open Pipeline Manager helps you turn shell-based workflows into visible, editabl
 ## Features
 
 - Visual pipeline canvas with ordered step links and output-to-input links.
-- Project explorer with create, upload, rename, delete, move, and file tabs.
+- Project explorer with create, upload, rename, delete, move, and file tabs, including safeguards against silent overwrites and unsaved-edit loss.
 - Text, FASTA, YAML, JSON, shell, and image viewing/editing where applicable.
 - Step editor for command, environment, working directory, inputs, outputs, options, and dependencies.
 - Pipeline variable insertion, for example `INPUT_FILE={input_file}`.

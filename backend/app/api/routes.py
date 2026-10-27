@@ -22,7 +22,7 @@ from app.services.project_tree import (
     move_project_path,
     preview_file,
     rename_project_path,
-    upload_project_file,
+    upload_project_files,
     write_project_file,
 )
 from app.services.storage import ProjectStore
@@ -228,11 +228,14 @@ def delete_file_post(request: FileDeleteRequest) -> dict[str, str]:
 def upload_files(request: FileUploadRequest) -> dict[str, list[str]]:
     try:
         root = store.current_project()
-        uploaded = [
-            str(upload_project_file(root, request.target_directory, item.name, item.content_base64).relative_to(root))
-            for item in request.files
-        ]
-        return {"paths": uploaded}
+        uploaded = upload_project_files(
+            root,
+            request.target_directory,
+            [(item.name, item.content_base64) for item in request.files],
+        )
+        return {"paths": [str(target.relative_to(root)) for target in uploaded]}
+    except FileExistsError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

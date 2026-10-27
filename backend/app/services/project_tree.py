@@ -3,9 +3,12 @@ from __future__ import annotations
 import base64
 import json
 import mimetypes
+import os
 import shutil
+import stat
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import IO
 
 from app.models.state import FilePreview, TreeNode
 
@@ -206,14 +209,112 @@ def delete_project_path(root: Path, requested_path: str) -> None:
         raise FileNotFoundError(requested_path)
 
 
+def fs_naming_key(path: Path) -> str:
+    """Key for comparing upload destinations with filesystem naming semantics.
+
+    ``os.path.normcase`` folds case where the platform's filesystems are
+    case-insensitive (``REPORT.txt`` and ``report.txt`` share a key) and
+    leaves the path untouched on case-sensitive platforms. It also normalizes
+    separators on Windows.
+    """
+    return os.path.normcase(str(path))
+
+
 def upload_project_file(root: Path, target_directory: str, name: str, content_base64: str) -> Path:
+    return upload_project_files(root, target_directory, [(name, content_base64)])[0]
+
+
+def upload_project_files(root: Path, target_directory: str, files: list[tuple[str, str]]) -> list[Path]:
+    """Upload ``(name, base64 content)`` pairs as one all-or-nothing batch.
+
+    Every destination is preflighted first (existing entries, symlinked
+    entries, duplicate destinations under the filesystem's naming semantics,
+    and names escaping the target directory). Every destination is then
+    reserved exclusively with ``'xb'`` before any content is decoded or
+    written, and any later failure rolls back exactly the entries this batch
+    created, so a failed batch leaves the project untouched.
+    """
+    root = root.resolve()
+    targets = [upload_project_file_target(root, target_directory, name) for name, _ in files]
+
+    requested: dict[str, Path] = {}
+    for target in targets:
+        key = fs_naming_key(target)
+        if key in requested:
+            raise FileExistsError(f"Path already requested for upload: {target.relative_to(root)}")
+        requested[key] = target
+
+    created: list[tuple[Path, tuple[int, int]]] = []
+    handles: list[IO[bytes]] = []
+    failure: BaseException | None = None
+    try:
+        for target in targets:
+            try:
+                handle = target.open("xb")
+            except FileExistsError as exc:
+                raise FileExistsError(f"Path already exists: {target.relative_to(root)}") from exc
+            handles.append(handle)
+            info = os.fstat(handle.fileno())
+            created.append((target, (info.st_dev, info.st_ino)))
+        for handle, (_, content_base64) in zip(handles, files):
+            handle.write(base64.b64decode(content_base64))
+    except BaseException as exc:
+        failure = exc
+    finally:
+        # Close before rolling back: unlinking open files fails on Windows.
+        for handle in handles:
+            try:
+                handle.close()
+            except BaseException as exc:
+                if failure is None:
+                    failure = exc
+    if failure is not None:
+        rollback_created_uploads(created)
+        raise failure
+    return targets
+
+
+def rollback_created_uploads(created: list[tuple[Path, tuple[int, int]]]) -> None:
+    """Delete the batch entries in ``created``, and only those.
+
+    A path is unlinked only while it still refers to the exact directory entry
+    the batch reserved: same device and inode, not a symlink. Anything swapped
+    in the meantime (including a symlink, whose target must never be touched)
+    is left alone. Unlink errors are ignored so rollback never masks the
+    failure that triggered it.
+    """
+    for target, identity in created:
+        try:
+            info = target.lstat()
+        except OSError:
+            continue
+        if (info.st_dev, info.st_ino) != identity:
+            continue
+        if stat.S_ISLNK(info.st_mode):
+            continue
+        try:
+            target.unlink()
+        except OSError:
+            continue
+
+
+def upload_project_file_target(root: Path, target_directory: str, name: str) -> Path:
     destination_dir = resolve_project_path(root, target_directory)
     if not destination_dir.is_dir():
         raise ValueError("Upload target is not a directory")
     if "/" in name or "\\" in name or not name.strip():
         raise ValueError("Uploaded file name must be a single file name")
     target = destination_dir / name.strip()
-    target.write_bytes(base64.b64decode(content_base64))
+    # Check containment lexically (never following symlinks) so names escaping
+    # the target directory (such as "..") are rejected before any existence
+    # semantics apply.
+    normalized_target = Path(os.path.normpath(target))
+    if destination_dir not in normalized_target.parents:
+        raise ValueError("Uploaded file name must stay inside the target directory")
+    # Path.exists() is false for dangling symlinks, but they are still an
+    # existing directory entry and must never be replaced by an upload.
+    if target.exists() or target.is_symlink():
+        raise FileExistsError(f"Path already exists: {target.relative_to(root.resolve())}")
     return target
 
 

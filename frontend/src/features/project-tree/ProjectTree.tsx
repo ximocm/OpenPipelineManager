@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ChevronDown,
   ChevronRight,
@@ -78,6 +78,10 @@ export function ProjectTree({
   const selectedNode = useMemo(() => (tree ? findNode(tree, selectedPath) : null), [tree, selectedPath]);
   const selectedDirectory = selectedNode?.type === 'directory' ? selectedNode.path : parentDirectory(selectedPath);
 
+  useEffect(() => {
+    if (tree && selectedPath !== '.' && !selectedNode) setSelectedPath('.');
+  }, [selectedNode, selectedPath, tree]);
+
   const updateExpanded = (path: string, open: boolean) => {
     setExpanded((current) => {
       const next = new Set(current);
@@ -103,9 +107,12 @@ export function ProjectTree({
 
   const deletePath = () => {
     if (!selectedNode || selectedNode.path === '.') return;
-    if (window.confirm(`Delete ${selectedNode.path}?`)) {
+    const message =
+      selectedNode.type === 'directory'
+        ? `Delete directory ${selectedNode.path} recursively? All contents will be removed.`
+        : `Delete ${selectedNode.path}?`;
+    if (window.confirm(message)) {
       onDeletePath(selectedNode.path);
-      setSelectedPath('.');
     }
   };
 

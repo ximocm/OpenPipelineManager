@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+import os
+from pathlib import Path
+
+import pytest
+
 from app.models.pipeline import PipelineStep
 from app.services.project_tree import (
     PROJECT_CONFIG_FILENAME,
@@ -7,9 +12,12 @@ from app.services.project_tree import (
     delete_project_path,
     ensure_project_scaffold,
     ensure_step_folders,
+    fs_naming_key,
     move_project_path,
     rename_project_path,
+    rollback_created_uploads,
     upload_project_file,
+    upload_project_files,
     validate_project_folder,
     preview_file,
     safe_segment,
@@ -113,6 +121,124 @@ def test_upload_file_rejects_path_escape(tmp_path):
         assert "outside" in str(exc)
     else:
         raise AssertionError("Expected path escape to be rejected")
+
+
+def test_upload_file_rejects_existing_file_without_modifying_it(tmp_path):
+    ensure_project_scaffold(tmp_path)
+    target = tmp_path / "Input" / "sample.txt"
+    target.write_bytes(b"original")
+
+    try:
+        upload_project_file(tmp_path, "Input", "sample.txt", "bmV3")
+    except FileExistsError as exc:
+        assert "already exists" in str(exc)
+    else:
+        raise AssertionError("Expected existing upload target to be rejected")
+
+    assert target.read_bytes() == b"original"
+
+
+def test_upload_file_rejects_dangling_symlink_without_replacing_it(tmp_path):
+    ensure_project_scaffold(tmp_path)
+    target = tmp_path / "Input" / "linked.txt"
+    _symlink_or_skip(target, tmp_path / "missing-target.txt")
+
+    try:
+        upload_project_file(tmp_path, "Input", "linked.txt", "bmV3")
+    except FileExistsError as exc:
+        assert "already exists" in str(exc)
+    else:
+        raise AssertionError("Expected dangling symlink upload target to be rejected")
+
+    assert target.is_symlink()
+
+
+def test_upload_file_rejects_symlink_without_modifying_its_target(tmp_path):
+    project_root = tmp_path / "project"
+    ensure_project_scaffold(project_root)
+    linked_file = tmp_path / "outside.txt"
+    linked_file.write_bytes(b"original")
+    target = project_root / "Input" / "linked.txt"
+    _symlink_or_skip(target, linked_file)
+
+    try:
+        upload_project_file(project_root, "Input", "linked.txt", "bmV3")
+    except FileExistsError as exc:
+        assert "already exists" in str(exc)
+    else:
+        raise AssertionError("Expected symlink upload target to be rejected")
+
+    assert target.is_symlink()
+    assert linked_file.read_bytes() == b"original"
+
+
+def _symlink_or_skip(link: Path, target: Path) -> None:
+    try:
+        link.symlink_to(target)
+    except (NotImplementedError, OSError) as exc:
+        pytest.skip(f"Symlinks are unavailable in this environment: {exc}")
+
+
+def _file_identity(path: Path) -> tuple[int, int]:
+    info = os.lstat(path)
+    return (info.st_dev, info.st_ino)
+
+
+def test_fs_naming_key_matches_normcase_case_folding():
+    folds_case = os.path.normcase("report.txt") == os.path.normcase("REPORT.txt")
+
+    assert (fs_naming_key(Path("Input/report.txt")) == fs_naming_key(Path("Input/REPORT.txt"))) is folds_case
+    assert fs_naming_key(Path("Input/report.txt")) != fs_naming_key(Path("Input/notes.txt"))
+
+
+def test_upload_files_rejects_case_equivalent_duplicates_when_normcase_folds(tmp_path, monkeypatch):
+    ensure_project_scaffold(tmp_path)
+    monkeypatch.setattr(os.path, "normcase", lambda value: value.lower())
+
+    try:
+        upload_project_files(tmp_path, "Input", [("report.txt", "Zmlyc3Q="), ("REPORT.txt", "c2Vjb25k=")])
+    except FileExistsError as exc:
+        assert "already requested" in str(exc)
+    else:
+        raise AssertionError("Expected case-equivalent duplicates to be rejected")
+
+    assert not (tmp_path / "Input" / "report.txt").exists()
+    assert not (tmp_path / "Input" / "REPORT.txt").exists()
+
+
+def test_rollback_created_uploads_removes_only_unmodified_batch_entries(tmp_path):
+    interloper = tmp_path / "interloper.txt"
+    interloper.write_text("interloper", encoding="utf-8")
+
+    created = tmp_path / "created.txt"
+    created.write_text("batch", encoding="utf-8")
+    created_identity = _file_identity(created)
+
+    replaced = tmp_path / "replaced.txt"
+    replaced.write_text("batch", encoding="utf-8")
+    replaced_identity = _file_identity(replaced)
+    os.replace(interloper, replaced)
+
+    linked = tmp_path / "linked.txt"
+    linked.write_text("batch", encoding="utf-8")
+    linked_identity = _file_identity(linked)
+    linked.unlink()
+    outside = tmp_path / "outside.txt"
+    outside.write_text("outside", encoding="utf-8")
+    _symlink_or_skip(linked, outside)
+
+    rollback_created_uploads(
+        [
+            (created, created_identity),
+            (replaced, replaced_identity),
+            (linked, linked_identity),
+        ]
+    )
+
+    assert not created.exists()
+    assert replaced.read_text(encoding="utf-8") == "interloper"
+    assert linked.is_symlink()
+    assert outside.read_text(encoding="utf-8") == "outside"
 
 
 def test_validate_project_folder_requires_project_config(tmp_path):
