@@ -6,7 +6,7 @@ The format follows Keep a Changelog-style sections, and the project uses semanti
 
 ## Unreleased
 
-## 0.2.0 - 2026-10-27
+## 0.2.0 - 2026-11-02
 
 ### Changed
 
