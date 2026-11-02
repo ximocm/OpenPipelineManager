@@ -1,0 +1,12 @@
+# Cloned and adapted from minmark (https://github.com/ximocm/minmark), Apache-2.0. Modifications © Open Pipeline Manager contributors.
+[package]
+name = "opm-document"
+version.workspace = true
+edition.workspace = true
+license = "Apache-2.0"
+description = "Modelo documental de OPM: buffer Markdown único y AST compartida"
+
+[dependencies]
+
+[dev-dependencies]
+opm-parser = { path = "../opm-parser" }

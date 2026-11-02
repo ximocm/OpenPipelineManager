@@ -1,0 +1,15 @@
+[package]
+name = "opm-exec"
+version.workspace = true
+edition.workspace = true
+license = "LicenseRef-Attribution-NonCommercial"
+description = "OPM execution engine: command building, placeholder quoting and the run lifecycle (execution.py port)"
+
+[dependencies]
+opm-fs = { workspace = true }
+opm-pipeline = { workspace = true }
+opm-store = { workspace = true }
+chrono = "0.4"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

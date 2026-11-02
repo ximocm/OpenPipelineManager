@@ -1,0 +1,12 @@
+[package]
+name = "opm-store"
+version.workspace = true
+edition.workspace = true
+license = "LicenseRef-Attribution-NonCommercial"
+description = "Persisted project state for OPM: ProjectStore over pipeline.project.json + .pipeline-manager runtime files (storage.py port)"
+
+[dependencies]
+opm-fs = { workspace = true }
+opm-pipeline = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }

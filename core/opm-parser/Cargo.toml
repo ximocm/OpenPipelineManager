@@ -1,0 +1,11 @@
+# Cloned and adapted from minmark (https://github.com/ximocm/minmark), Apache-2.0. Modifications © Open Pipeline Manager contributors.
+[package]
+name = "opm-parser"
+version.workspace = true
+edition.workspace = true
+license = "Apache-2.0"
+description = "Parser Markdown de OPM: pulldown-cmark + extensiones del dialecto §7"
+
+[dependencies]
+opm-document = { workspace = true }
+pulldown-cmark = { workspace = true }

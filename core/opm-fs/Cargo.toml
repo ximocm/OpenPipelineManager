@@ -1,0 +1,9 @@
+[package]
+name = "opm-fs"
+version.workspace = true
+edition.workspace = true
+license = "Apache-2.0"
+description = "Filesystem for Open Pipeline Manager: atomic saves, safe path resolution and project operations"
+
+[dependencies]
+opm-document = { workspace = true }
