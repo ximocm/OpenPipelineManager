@@ -6,6 +6,17 @@ The format follows Keep a Changelog-style sections, and the project uses semanti
 
 ## Unreleased
 
+### Changed
+
+- Updated the desktop dependencies to GTK4 bindings 0.11.5, pulldown-cmark 0.13.6, and serde_yml 0.0.13, keeping the core and UI lockfiles aligned for reproducible builds. The project version is now 0.2.1 for the next release.
+- Updated GitHub Actions checkout, cache, and artifact actions; pinned the sync workflow checkout to the same reviewed commit as CI and releases.
+- Grouped Dependabot updates for shared Rust dependencies across core and UI, and grouped workflow action updates to avoid fragmented dependency pull requests.
+
+### Fixed
+
+- Adapted YAML model deserialization to the updated parser while preserving pipeline aliases, quoted boolean values, non-finite numeric validation, and invalid-document errors.
+- Made cancellation test commands replace their shell process so CI does not intermittently wait on an unsupported descendant process holding an output pipe open.
+
 ## 0.2.0 - 2026-11-02
 
 ### Changed
