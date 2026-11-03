@@ -1,6 +1,5 @@
 //! Pipeline file parsing — port of `backend/app/services/pipeline_parser.py`.
 
-use serde::Deserialize;
 use std::fmt;
 
 use crate::model::PipelineConfig;
@@ -85,7 +84,7 @@ fn parse_yaml(text: &str) -> Result<PipelineConfig, ParseError> {
     match doc {
         // Empty file / explicit null == `{}` (Python: `yaml.safe_load(raw) or {}`).
         serde_yml::Value::Null => Ok(PipelineConfig::default()),
-        serde_yml::Value::Mapping(_) => PipelineConfig::deserialize(doc).map_err(ParseError::Yaml),
+        serde_yml::Value::Mapping(_) => serde_yml::from_value(doc).map_err(ParseError::Yaml),
         _ => Err(ParseError::NotAnObject),
     }
 }

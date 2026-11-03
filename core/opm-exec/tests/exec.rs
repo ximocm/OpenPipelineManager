@@ -591,7 +591,7 @@ fn stop_cancels_current_step_and_skips_the_rest() {
     import_json(
         &store,
         r#"[
-            {"id": "sleeper", "name": "Sleeper", "command": "sleep 30"},
+            {"id": "sleeper", "name": "Sleeper", "command": "exec sleep 30"},
             {
                 "id": "follower",
                 "name": "Follower",
@@ -629,7 +629,9 @@ fn stop_cancels_current_step_and_skips_the_rest() {
 #[test]
 fn second_run_while_running_is_rejected() {
     let (parent, store, manager) = fixture("already-running");
-    import_json(&store, r#"[{"id": "sleeper", "name": "Sleeper", "command": "sleep 30"}]"#);
+    // stop() signals the immediate child. Replace the shell so no descendant
+    // can inherit its output pipe and make completion depend on shell timing.
+    import_json(&store, r#"[{"id": "sleeper", "name": "Sleeper", "command": "exec sleep 30"}]"#);
 
     manager.run_steps(vec!["sleeper".to_string()]).unwrap();
     collect_until(&manager, Duration::from_secs(10), |event| {
