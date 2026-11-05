@@ -54,73 +54,33 @@ cargo run --locked --manifest-path ui/Cargo.toml
 
 ## How It Works
 
-1. Create a project or open an existing folder containing `project.config.json`.
-2. Import a `pipeline.yml`, `pipeline.yaml`, or `pipeline.json`.
+1. Design a pipeline (New pipeline) or open one from the application library.
+2. Save it as a named `.pipeline` document, or import a `pipeline.yml`, `pipeline.yaml`, or `pipeline.json`.
 3. Edit steps on the canvas or in the right-side panel.
 4. Define inputs, outputs, options, and previous-output links.
 5. Fix validation blockers.
 6. Run selected steps or run the pending pipeline.
 
-Runtime files are written to the opened project under `.pipeline-manager/`, not to this source repository.
+Runtime files are written to the opened work folder under `.pipeline-manager/`, not to this source repository.
 
 ## Pipeline Example
 
-```yaml
-steps:
-  - id: create_dataset
-    name: Create demo dataset
-    working_directory: "."
-    command: |
-      DEMO_DATA={demo_data} \
-      bash -c 'mkdir -p "$(dirname "$DEMO_DATA")" && printf "sample,value\nalpha,3\n" > "$DEMO_DATA"'
-    inputs: []
-    outputs:
-      - key: demo_data
-        label: Demo CSV
-        path: work/input/demo.csv
+Import [`examples/first-run.json`](examples/first-run.json) into a fresh work
+folder. This single example generates a message in `Input/message.txt`, then
+passes it to a dependent step that writes `outputs/report.txt`. You can change
+the message and choose a report mode without external scripts or downloads.
 
-  - id: analyze_dataset
-    name: Analyze dataset
-    working_directory: "."
-    command: |
-      DEMO_DATA={demo_data} \
-      REPORT_FILE={report_file} \
-      METHOD={method} \
-      bash -c 'mkdir -p "$(dirname "$REPORT_FILE")" && printf "method=%s\nrows=%s\n" "$METHOD" "$(wc -l < "$DEMO_DATA")" > "$REPORT_FILE"'
-    inputs:
-      - key: demo_data
-        label: Demo CSV
-        type: file
-        source_step: create_dataset
-        source_output: demo_data
-        required: true
-    outputs:
-      - key: report_file
-        label: Report
-        path: results/report.txt
-    parameters:
-      - key: method
-        label: Analysis method
-        type: selector
-        default: fast
-        options:
-          - fast
-          - accurate
-    dependencies:
-      - create_dataset
+With default values, the report contains:
+
+```text
+Hello from Open Pipeline Manager
+mode=demo
 ```
 
-Inputs can also consume previous outputs:
-
-```yaml
-inputs:
-  - key: demo_data
-    type: file
-    source_step: create_dataset
-    source_output: demo_data
-```
-
-See `examples/pipeline.yml`, `examples/pipeline.json`, and `examples/generic-analysis.pipeline.yml`.
+Follow the [fresh work folder walkthrough](examples/README.md) to create and run
+the example. It uses the JSON import format; pipelines are then saved as named
+`.pipeline` documents in the application library (see
+[the storage design](docs/PIPELINE_STORAGE.md)).
 
 ## Validation
 
@@ -154,7 +114,7 @@ core/
   opm-fs/         file store, atomic writes, project tree and file operations
   opm-pipeline/   pipeline model, YAML/JSON parsing, validation
   opm-exec/       execution engine with logs, statuses, and .done markers
-  opm-store/      project persistence and runtime state
+  opm-store/      pipeline library and work-folder persistence
 ui/
   src/            GTK4 application: editor, tabs, explorer, canvas, step panel,
                   run controls, logs (bin: opm)
@@ -163,24 +123,21 @@ docs/             CI, publishing, and architecture decision records
 examples/         sample pipeline definitions
 ```
 
-Opened projects use this structure:
+Work folders use this structure:
 
 ```text
-ProjectFolder/
+WorkFolder/
   Input/
   steps/
   outputs/
-  project.config.json
-  config.txt
-  pipeline.project.json
   .pipeline-manager/
-    params.json
-    state.json
-    visual-layout.json
-    validation.json
+    run.json
     logs/
     done/
 ```
+
+Reusable pipelines live separately in the application library as named
+`.pipeline` documents.
 
 ## Development
 
@@ -209,7 +166,8 @@ python3 scripts/test_release.py
 - [Building](BUILDING.md): per-OS prerequisites, build, run, and local packaging.
 - [CI](docs/CI.md): CI/release workflows and how to cut a release.
 - [Publishing](docs/PUBLISHING.md): packaged artifacts and maintainer notes.
-- [Examples](examples/): runnable YAML and JSON pipeline definitions.
+- [Pipeline storage design](docs/PIPELINE_STORAGE.md): pipeline library and consolidated work persistence (implemented; see `DECISIONS.md`).
+- [Example](examples/README.md): one self-contained JSON pipeline and a fresh-work walkthrough.
 - [Git Guidelines](GITGUIDELINES.md): branch, test, changelog, release, and repository protection policy.
 - [Changelog](CHANGELOG.md): notable changes by version.
 - [Security Policy](SECURITY.md): supported versions and vulnerability reporting guidance.

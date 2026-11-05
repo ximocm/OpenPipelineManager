@@ -8,9 +8,15 @@ The format follows Keep a Changelog-style sections, and the project uses semanti
 
 ### Changed
 
+- Replaced the project persistence format with the pipeline-storage design: reusable pipelines are now named `<name>.pipeline` documents (UTF-8 JSON, `format_version: 1`) in the application library, and each working folder keeps one `.pipeline-manager/run.json` with the definition snapshot, values, and step state. Designing works without a work folder; work folders no longer contain `project.config.json`, `config.txt`, `pipeline.project.json`, or the separate `params`/`state`/`visual-layout`/`validation` runtime files. This is a clean break: old test projects are not read or migrated (see `docs/PIPELINE_STORAGE.md` and `DECISIONS.md`). The project version is now 0.3.0 for the next release.
+- Replaced the three old sample pipeline definitions with one self-contained `examples/first-run.json` and a fresh-work walkthrough. Recorded that the planned storage replacement needs no backward compatibility or migration for disposable test projects; the application persistence format is not changed yet.
 - Updated the desktop dependencies to GTK4 bindings 0.11.5, pulldown-cmark 0.13.6, and serde_yml 0.0.13, keeping the core and UI lockfiles aligned for reproducible builds. The project version is now 0.2.1 for the next release.
 - Updated GitHub Actions checkout, cache, and artifact actions; pinned the sync workflow checkout to the same reviewed commit as CI and releases.
 - Grouped Dependabot updates for shared Rust dependencies across core and UI, and grouped workflow action updates to avoid fragmented dependency pull requests.
+
+### Added
+
+- Library and work flows: New/Open pipeline with Save and Save As (naming conflicts always require an explicit choice), Import/Export as YAML/JSON sharing formats, New work/Open work from a library pipeline and a working directory, and an explicit Update from library action that reconciles values and invalidates completion state only for changed steps. The library location (`OPM_PIPELINES_DIR` or the per-OS data directory) is surfaced in the app.
 
 ### Fixed
 

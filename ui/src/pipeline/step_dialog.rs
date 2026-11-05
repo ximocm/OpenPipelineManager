@@ -574,8 +574,11 @@ impl OutputChoice {
 /// calculada por LOS MISMOS helpers con los que el store persiste el enlace
 /// (`resolve_pipeline_path` + `relative_project_path`, P2-15: la vista
 /// previa y lo guardado son la misma aritmética, separadores incluidos).
-/// `root` es la raíz del proyecto; sin ella no hay opciones (el diálogo solo
-/// abre con proyecto abierto).
+/// `root` es la raíz ANCLA de la definición: en ventanas de trabajo, la
+/// carpeta abierta; en ventanas de diseño, la raíz de la librería (el store
+/// está sin abrir — `crate::step_dialog_root`) — la raíz común se cancela en
+/// la relativa, así que ambas dan la MISMA cadena. `None` solo en ventanas
+/// sin dominio de pipeline (allí no se abre este diálogo).
 pub fn output_choices(
     root: Option<&Path>,
     steps: &[PipelineStep],
@@ -1894,7 +1897,7 @@ mod tests {
     /// P2-15: la vista previa «From output» usa LA cadena del store
     /// (`resolve_pipeline_path` + `relative_project_path`) — pin Python:
     /// `os.path.relpath("outputs/r.txt", start="steps/w/work")`; y sin raíz
-    /// de proyecto no hay opciones.
+    /// ancla (ventana sin dominio de pipeline) no hay opciones.
     #[test]
     fn relativas_del_picker() {
         let mut produce = step("produce", ".");
@@ -1910,7 +1913,8 @@ mod tests {
         assert_eq!(choices[0].default_value, "../../../outputs/r.txt");
         assert_eq!(choices[0].source_output(), "r");
 
-        // Raíz ausente (no debería pasar: el diálogo exige proyecto) → nada.
+        // Raíz ancla ausente (solo ventanas sin dominio de pipeline: allí no
+        // se abre el diálogo) → nada.
         assert!(output_choices(None, &steps, Some("w"), "steps/w/work").is_empty());
 
         // Fuente insegura (path absoluto) → la opción no se ofrece (la

@@ -2,9 +2,9 @@
 
 ## 1. Overview
 
-Open Pipeline Manager is a local application for creating, importing, editing, validating, and running pipelines. A pipeline is a list of steps. Each step can declare a command, input files or folders, output paths, configurable options, dependencies, and an execution environment.
+Open Pipeline Manager is a local application for designing, importing, editing, validating, and running pipelines. A pipeline is a list of steps. Each step can declare a command, input files or folders, output paths, configurable options, dependencies, and an execution environment.
 
-The app is local-first: pipeline commands run on the local machine. Treat imported pipelines as executable code.
+Pipelines are designed and kept in the application library as named `.pipeline` documents; they run in separate working folders that hold data, outputs, and execution state. The app is local-first: pipeline commands run on the local machine. Treat imported pipelines as executable code.
 
 ## 2. Starting the Application
 
@@ -18,33 +18,60 @@ or run a built binary directly, for example `./target/release/opm`. Per-OS
 prerequisites are documented in `BUILDING.md`. On Windows, running pipelines
 additionally requires a POSIX shell (Git for Windows provides bash).
 
-## 3. Projects
+## 3. Pipelines, Library, and Work Folders
 
-When the app opens, choose one of two actions:
+The application separates *designing* a pipeline from *running* it.
 
-- **Create**: choose a parent folder, enter a project name, and create a new project structure.
-- **Open**: select an existing folder that contains `project.config.json`.
-
-A project contains:
+**Design.** Use **New pipeline** to start an empty pipeline or **Open pipeline**
+to edit one already saved in the library. Designing works without any working
+folder: edit the graph and declarations, then **Save pipeline** (or **Save as
+pipeline** to duplicate) with a name. A pipeline document is stored as a single
+native file in the application library:
 
 ```text
-ProjectFolder/
-  Input/                 Uploaded or source input files
-  steps/                 Per-step work folders
-  outputs/               Shared outputs
-  project.config.json    Project marker file
-  config.txt             Editable notes/config
-  pipeline.project.json  Current imported pipeline snapshot
-  .pipeline-manager/     Runtime state, logs, validation, done markers
+<library>/first-run.pipeline      One named pipeline: steps, declarations,
+                                  defaults, and canvas layout (UTF-8 JSON)
 ```
+
+The library location is shown in the app and resolves to `OPM_PIPELINES_DIR` if
+set, otherwise the per-OS data directory (`~/.local/share/opm/pipelines` on
+Linux, `%APPDATA%\opm\pipelines` on Windows, `~/Library/Application Support/opm/pipelines`
+on macOS). Saving over an existing name always asks explicitly (overwrite,
+save under another name, or cancel).
+
+**Execution.** Use **New work** to pick a library pipeline and a working
+directory, or **Open work** to resume a working directory that contains
+`.pipeline-manager/run.json`. A work folder holds data and execution state only:
+
+```text
+WorkFolder/
+  Input/                    Uploaded or source input files
+  steps/                    Per-step work folders
+  outputs/                  Shared outputs
+  .pipeline-manager/
+    run.json                Work configuration: definition snapshot, values,
+                            and step execution state
+    logs/                   Per-step logs
+    done/                   Per-step completion markers
+```
+
+Each work folder embeds its own snapshot of the pipeline it was created from.
+Editing the library never changes existing work; use **Update from library** in
+a work window to explicitly adopt a revised definition (changed steps lose
+their completion state, kept parameter values are reconciled). Work keeps
+working even if the library file was moved or deleted.
 
 The left explorer supports creating files/folders, uploading files, renaming, deleting, and moving items by drag and drop. Double click a text, FASTA, YAML, JSON, shell, or image file to open it in a center tab.
 
-## 4. Importing a Pipeline
+## 4. Importing and Exporting Pipelines
 
-Use **Import pipeline** and select a `.yml`, `.yaml`, or `.json` file. The import creates step folders and stores the imported configuration in `pipeline.project.json`.
+Use **Import pipeline** to turn an external `.yml`, `.yaml`, or `.json`
+definition into a named library document. Imports never silently overwrite: if
+the name already exists, the app asks. Use **Export pipeline** to share a
+pipeline as YAML or JSON — exporting is an explicit action and does not create
+a second configuration the app needs to operate.
 
-Example:
+Imported example:
 
 ```yaml
 steps:
@@ -57,7 +84,10 @@ If no dependencies are defined, the app connects steps in their file order.
 
 ## 5. Editing Steps
 
-Select a step and use the edit button. You can configure:
+Structural editing belongs to the Design window: select a step and use the
+edit button to create or change steps. A work window shows the same step
+detail but only lets you change values (inputs and options); its graph is
+read-only. You can configure in Design:
 
 - **Step id**: stable identifier used in dependencies.
 - **Name**: display name.
@@ -164,30 +194,31 @@ Blockers should be fixed before running. Warnings indicate incomplete or risky c
 
 ## 10. Running Pipelines
 
-Use **Run selected** to run selected steps. If no steps are selected, the app runs pending steps in dependency order. Use each step card or the right panel to run one step.
+Running happens in a work window. Use **Run selected** to run selected steps. If no steps are selected, the app runs pending steps in dependency order. Use each step card or the right panel to run one step. Input selections and option values are per work folder: the same library pipeline can run in several work folders without sharing values, logs, outputs, or completion state.
 
-Execution state is stored in:
+Work state is stored in:
 
 ```text
 .pipeline-manager/
+  run.json     Definition snapshot, values, and step states
   logs/
   done/
-  state.json
-  params.json
-  validation.json
 ```
 
-A step is considered `ok` only when its `.done` marker exists and all declared outputs exist.
+A step is considered `ok` only when its `.done` marker exists and all declared outputs exist. If the library pipeline changes later, existing work is unaffected until you explicitly run **Update from library**.
 
 ## 11. Example Pipelines
 
-- `examples/pipeline.yml`: small demo pipeline.
-- `examples/pipeline.json`: JSON equivalent demo.
-- `examples/generic-analysis.pipeline.yml`: generic four-step pipeline with explicit inputs, outputs, options, and previous-output links.
+- [`examples/first-run.json`](examples/first-run.json): self-contained two-step
+  pipeline that generates a message and writes a report, with configurable
+  message and report mode, linked outputs, and explicit dependencies.
+- [`Fresh work folder walkthrough`](examples/README.md): create an empty work
+  folder, import the single definition, run it, and inspect the expected result.
 
 ## 12. Troubleshooting
 
-- If **Open** fails, make sure the folder contains `project.config.json`.
+- If **Open work** fails, make sure the folder contains `.pipeline-manager/run.json`; use **New work** to create one.
+- If a `.pipeline` document fails to open, it may come from a newer app version (each document records its format version); the file is never rewritten behind an error.
 - If validation complains about a placeholder, add an input, option, or output with the same key.
 - If a step finishes but is marked error, check whether every declared output path was created.
 - If PNG/FASTA/text files do not open, double click them in the explorer to open a center tab.

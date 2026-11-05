@@ -10,10 +10,12 @@
 
 pub mod canvas;
 mod canvas_model;
+pub mod design;
 pub mod step_dialog;
 pub mod step_panel;
 
 pub use canvas::{CanvasCallbacks, PipelineCanvas};
-pub use canvas_model::CanvasData;
+pub use canvas_model::{CanvasContext, CanvasData};
+pub use design::DesignState;
 pub use step_dialog::StepDraft;
-pub use step_panel::{StepCallbacks, StepPanel};
+pub use step_panel::{StepCallbacks, StepCaps, StepPanel};

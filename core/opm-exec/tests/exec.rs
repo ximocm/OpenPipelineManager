@@ -17,27 +17,40 @@ use opm_exec::{ExecError, ExecutionManager};
 #[cfg(unix)]
 use opm_exec::{ExecEvent, StepState, StepStatus};
 use opm_pipeline::{FieldType, IssueSeverity, OutputSpec, PipelineStep, Value, ValueSpec};
-use opm_store::{ProjectStore, ValueMap};
+use opm_store::{PipelineDoc, ProjectStore, ValueMap};
 
 fn cleanup(parent: &PathBuf) {
     let _ = fs::remove_dir_all(parent);
 }
 
-/// Fixture: project + store + manager (§11 A6: `Arc<ProjectStore>`).
+/// Fixture: empty work folder + store + manager (§11 A6: `Arc<ProjectStore>`).
 fn fixture(tag: &str) -> (PathBuf, Arc<ProjectStore>, ExecutionManager) {
     let parent = temp_dir(tag);
     let store = Arc::new(ProjectStore::new());
-    store.create_project(&parent, "proj").expect("scaffold");
+    store
+        .create_work(&parent.join("proj"), &PipelineDoc::default())
+        .expect("work folder");
     let manager = ExecutionManager::new(Arc::clone(&store));
     (parent, store, manager)
 }
 
-/// Write `pipeline.json` with the given `steps` array and import it.
+/// Parse a pipeline file and adopt it into the open work folder (the new
+/// API's import path: `parse → import normalization → adopt_definition`).
+fn adopt_file(store: &ProjectStore, path: &PathBuf) {
+    let text = fs::read_to_string(path).expect("read pipeline file");
+    let pipeline = opm_pipeline::parse_pipeline(&path.to_string_lossy(), &text)
+        .expect("parse pipeline file");
+    let mut doc = PipelineDoc::new("test", pipeline);
+    doc.normalize_for_import();
+    store.adopt_definition(&doc).expect("adopt definition");
+}
+
+/// Write `pipeline.json` with the given `steps` array and adopt it.
 fn import_json(store: &ProjectStore, steps: &str) {
-    let root = store.project_root().expect("project open");
+    let root = store.project_root().expect("work open");
     let path = root.join("pipeline.json");
     fs::write(&path, format!("{{\"steps\": {steps}}}")).expect("write pipeline");
-    store.import_pipeline(&path).expect("import");
+    adopt_file(store, &path);
 }
 
 /// Collect events until `done` matches (or panic with what arrived).
@@ -359,6 +372,81 @@ fn run_keeps_quoted_placeholder_as_a_single_shell_argument() {
     assert!(finished_state(&events, "a").is_some());
 
     cleanup(&parent);
+}
+
+// ------------------------------------------------------------- shipped example
+
+/// Exercise the shipped example itself, including linked outputs and isolated
+/// values/results when imported into independent, freshly created work folders.
+#[cfg(unix)]
+#[test]
+fn first_run_example_runs_from_scratch_in_independent_work_folders() {
+    let source = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/first-run.json");
+    let original = fs::read(&source).unwrap();
+    let (first_parent, first_store, first_manager) = fixture("example-first");
+    let first_root = first_store.project_root().unwrap();
+    adopt_file(&first_store, &source);
+    first_manager.run_selected().unwrap();
+    let first_events = collect_finished(&first_manager);
+
+    assert_eq!(
+        started_ids(&first_events),
+        ["create_message", "write_report"]
+    );
+    for id in ["create_message", "write_report"] {
+        assert_eq!(first_store.state_of(id).status, StepStatus::Ok);
+        assert!(first_store.is_step_ok(id));
+    }
+    let expected_first = "Hello from Open Pipeline Manager\nmode=demo\n";
+    assert_eq!(
+        fs::read_to_string(first_root.join("outputs/report.txt")).unwrap(),
+        expected_first
+    );
+
+    let (second_parent, second_store, second_manager) = fixture("example-second");
+    let second_root = second_store.project_root().unwrap();
+    adopt_file(&second_store, &source);
+    assert!(!second_root.join("Input/message.txt").exists());
+    assert!(!second_root.join("outputs/report.txt").exists());
+    assert_eq!(
+        second_store.state_of("create_message").status,
+        StepStatus::Pending
+    );
+    second_store
+        .set_params(
+            "create_message",
+            ValueMap::from([("message".into(), str_value("Another work folder"))]),
+        )
+        .unwrap();
+    second_store
+        .set_params(
+            "write_report",
+            ValueMap::from([("mode".into(), str_value("review"))]),
+        )
+        .unwrap();
+    second_manager.run_selected().unwrap();
+    let second_events = collect_finished(&second_manager);
+
+    assert_eq!(
+        started_ids(&second_events),
+        ["create_message", "write_report"]
+    );
+    for id in ["create_message", "write_report"] {
+        assert_eq!(second_store.state_of(id).status, StepStatus::Ok);
+        assert!(second_store.is_step_ok(id));
+    }
+    assert_eq!(
+        fs::read_to_string(second_root.join("outputs/report.txt")).unwrap(),
+        "Another work folder\nmode=review\n"
+    );
+    assert_eq!(
+        fs::read_to_string(first_root.join("outputs/report.txt")).unwrap(),
+        expected_first
+    );
+    assert_eq!(fs::read(&source).unwrap(), original);
+
+    cleanup(&first_parent);
+    cleanup(&second_parent);
 }
 
 // ------------------------------------------------------------- preflight

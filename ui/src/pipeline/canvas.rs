@@ -15,9 +15,11 @@
 //! - estados vacíos del §6 (sin proyecto / sin pipeline).
 //!
 //! Ninguna mutación estructural ocurre si `edits_enabled` es `false`
-//! (§11 A12: mientras corre, las mutaciones estructurales están
-//! deshabilitadas); sí se permiten selección, checkbox y mover nodos (el
-//! layout no es estructural).
+//! (§11 A12: en ventanas de trabajo el lienzo es de SOLO LECTURA —
+//! selección y checkbox de run, nada más—, y en ejecución las mutaciones
+//! estructurales están deshabilitadas): tampoco se mueven nodos (el layout
+//! es parte del documento de diseño) ni se reconectan/borran aristas.
+//! Selección de paso y checkbox de run sí están siempre permitidos.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -108,8 +110,10 @@ enum Press {
     Connect(String),
     /// Extremo de destino de arista → reconectar.
     Reconnect(String, String),
-    /// Tarjeta → seleccionar + posible movimiento.
+    /// Tarjeta → seleccionar paso + posible movimiento.
     Node(String, (f64, f64)),
+    /// Tarjeta con ediciones deshabilitadas: SOLO selección (sin drag).
+    Select,
     /// Vacío → pan.
     Pan,
     /// Arista (ya seleccionada) sin interacción.
@@ -144,7 +148,7 @@ enum Interaction {
 impl Interaction {
     fn from_press(press: Press, screen: (f64, f64), start_pan: (f64, f64)) -> Self {
         match press {
-            Press::Toggle | Press::Edge => Interaction::None,
+            Press::Toggle | Press::Edge | Press::Select => Interaction::None,
             Press::Connect(source) => Interaction::Connect {
                 source,
                 start: screen,
@@ -269,15 +273,22 @@ impl CanvasState {
             }
         }
 
-        // 3) Tarjeta → seleccionar paso + posible movimiento.
+        // 3) Tarjeta → seleccionar paso + posible movimiento (el movimiento
+        //    SOLO con ediciones habilitadas: en ventana de trabajo el grafo
+        //    es de solo lectura).
         if let Some(index) = model.node_at(world) {
             let node = &model.nodes[index];
             let id = node.id.clone();
             let offset = (world.0 - node.position.0, world.1 - node.position.1);
+            let editable = self.callbacks.edits();
             drop(model);
             *self.selected_edge.borrow_mut() = None;
             (self.callbacks.on_select)(id.clone());
-            self.press.set(Some(Press::Node(id, offset)));
+            self.press.set(Some(if editable {
+                Press::Node(id, offset)
+            } else {
+                Press::Select
+            }));
             return;
         }
 
@@ -1059,8 +1070,7 @@ mod tests {
             },
         );
         CanvasData {
-            project_path: "/proy".to_owned(),
-            has_pipeline: true,
+            context: crate::CanvasContext::Work,
             steps: vec![step],
             states: HashMap::new(),
             layout,
@@ -1209,9 +1219,9 @@ mod tests {
             },
         );
         // Sin datos, el estado vacío del §6 aparece al primer `update` (el
-        // modelo arranca en `CanvasModel::default()`, sin mensaje).
+        // contexto por defecto Closed: sin fuente de pipeline).
         canvas.update(CanvasData::default());
-        assert!(canvas.empty_message().unwrap().contains("No project open"));
+        assert!(canvas.empty_message().unwrap().contains("No pipeline open"));
         assert_eq!(canvas.transform().zoom, 1.0);
     }
 }

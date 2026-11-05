@@ -2,6 +2,82 @@
 
 This file records compatibility and behavior decisions that affect pipeline schemas or user-visible execution.
 
+## 2026-11-03 — pipeline-storage implementation: native library and `run.json`
+
+**Status:** Accepted; implemented. Supersedes the "implementation pending"
+status of the entry below and resolves its three open choices.
+
+### Context
+
+The pipeline library and storage proposal (`docs/PIPELINE_STORAGE.md`) fixed the
+direction but left three choices open: the native document encoding, the
+application library location, and the update/adopt semantics. Implementation
+could not start without settling them.
+
+### Decisions
+
+- **Native encoding:** UTF-8 JSON under the `.pipeline` extension with a
+  versioned envelope (`format_version: 1`). YAML and JSON remain import/export
+  formats only, never companion files. Alternative considered: YAML as the
+  native document — rejected to avoid encoding guessing and dual-file sync.
+- **Library location:** `OPM_PIPELINES_DIR` when set (portable builds, tests),
+  otherwise the per-OS data directory via the `directories` crate
+  (`~/.local/share/opm/pipelines`, `%APPDATA%\opm\pipelines`,
+  `~/Library/Application Support/opm/pipelines`), otherwise a temp fallback.
+  Never derived from the launch working directory; the location is surfaced in
+  the app. Alternative considered: executable-adjacent `pipelines/` — rejected
+  because installed executables may live in read-only locations.
+- **Update semantics:** adopting a revised library definition is explicit
+  ("Update from library"); parameter/input values survive only for keys still
+  declared, and a step whose definition fingerprint changed (command,
+  environment, working directory, inputs, outputs, parameters, dependencies)
+  loses its `.done` marker and returns to `pending`. Removed steps are pruned
+  entirely. Saving work never rewrites the library document.
+
+### Consequences
+
+- Work folders carry their own definition snapshot in `.pipeline-manager/run.json`
+  and remain openable if the library file moves, changes, or disappears.
+- The project marker, `config.txt`, `pipeline.project.json`, and the separate
+  `params`/`state`/`visual-layout`/`validation` runtime files are gone; a failed
+  save leaves the previous complete document readable (atomic writes).
+- Unsupported `format_version` values are rejected with a visible error and
+  never clobber the file.
+
+## 2026-11-03 — Pipeline library and consolidated work persistence
+
+**Status:** Proposed; implementation pending. The application still uses the
+current persistence format; its replacement will be a clean break.
+
+### Context
+
+Reusable pipeline design is currently tied to a project folder. Project metadata,
+the imported pipeline snapshot, and runtime JSON files create several documents,
+with parameters and state duplicated between them. Source definitions and manual
+exports add more visible files without a clear single document to edit.
+
+### Proposed direction
+
+- Keep named reusable pipelines in the application's `pipelines/` library and
+  separate Design from Execution. Designing must work without a work folder.
+- Use one native `<name>.pipeline` document; retain YAML/JSON import and export.
+- Use one `.pipeline-manager/run.json` support document per work folder for the
+  execution snapshot, values, and state. Keep logs and completion artifacts separate.
+- Stop generating `config.txt`, the separate project marker, and redundant
+  snapshot/runtime configuration files once the replacement is implemented.
+- Existing projects are disposable tests: no backward compatibility, legacy
+  reader, or migration tooling is required. Replace the old test setup with one
+  example created from scratch.
+- Library edits must never silently change the definition used by work created
+  with the new format.
+
+The [storage proposal](docs/PIPELINE_STORAGE.md) records the current file roles,
+target structure, implementation plan, acceptance criteria, and unresolved choices
+(native encoding, installed application library location, and update semantics).
+This entry records future work and does not change the current on-disk schema.
+Once implemented, the clean break supersedes the project persistence
+compatibility requirement in the 2026-10-27 stack migration decision below.
+
 ## 2026-08-20 — Optional output keys and unique placeholder names
 
 **Status:** Accepted

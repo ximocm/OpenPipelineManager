@@ -34,11 +34,36 @@ pub struct StepCallbacks {
     pub on_param: Rc<dyn Fn(String, String, Value)>,
 }
 
+/// Capacidades del panel según el tipo de ventana (pipeline-storage):
+/// edición estructural solo en diseño, ejecución y valores solo en trabajo.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StepCaps {
+    /// Botón Edit (abre el diálogo crear/editar paso) — SOLO diseño.
+    pub structural_edit: bool,
+    /// Botón Run del paso — SOLO ventanas de trabajo.
+    pub run: bool,
+    /// Editores de valores (inputs/parámetros) — SOLO ventanas de trabajo
+    /// (en diseño se muestran los defaults declarados como solo lectura).
+    pub values: bool,
+}
+
+impl Default for StepCaps {
+    fn default() -> Self {
+        Self {
+            structural_edit: true,
+            run: true,
+            values: true,
+        }
+    }
+}
+
 /// Panel de detalle del paso seleccionado.
 pub struct StepPanel {
     root: gtk::ScrolledWindow,
     content: gtk::Box,
     running: Cell<bool>,
+    /// Capacidades por tipo de ventana (fijas tras construir).
+    caps: Cell<StepCaps>,
     current: RefCell<Option<String>>,
     /// Labels de validación por campo `(paso, key)` para refresco suave.
     field_issues: RefCell<Vec<(String, String, gtk::Label)>>,
@@ -70,6 +95,7 @@ impl StepPanel {
             root,
             content,
             running: Cell::new(false),
+            caps: Cell::new(StepCaps::default()),
             current: RefCell::new(None),
             field_issues: RefCell::new(Vec::new()),
             actions: RefCell::new(None),
@@ -95,13 +121,28 @@ impl StepPanel {
         self.current.borrow().clone()
     }
 
+    /// Fija las capacidades según el tipo de ventana; se llama justo después
+    /// de construir (antes de la primera selección, cuando aún no hay
+    /// editores montados).
+    pub fn set_caps(&self, caps: StepCaps) {
+        self.caps.set(caps);
+        self.apply_actions_sensitivity();
+    }
+
     /// Habilita/deshabilita Edit/Run (§11 A12: acciones estructurales
-    /// deshabilitadas mientras corre; A10: Run habilitado en reposo).
+    /// deshabilitadas mientras corre; A10: Run habilitado en reposo), sin
+    /// pisar la visibilidad fijada por [`Self::set_caps`].
     pub fn set_running(&self, running: bool) {
         self.running.set(running);
+        self.apply_actions_sensitivity();
+    }
+
+    fn apply_actions_sensitivity(&self) {
+        let caps = self.caps.get();
+        let running = self.running.get();
         if let Some((edit, run)) = self.actions.borrow().as_ref() {
-            edit.set_sensitive(!running);
-            run.set_sensitive(!running);
+            edit.set_sensitive(caps.structural_edit && !running);
+            run.set_sensitive(caps.run && !running);
         }
     }
 
@@ -178,9 +219,10 @@ impl StepPanel {
         };
 
         let step = &detail.step;
+        let caps = self.caps.get();
         let running = self.running.get();
 
-        // Cabecera: nombre + Edit/Run.
+        // Cabecera: nombre + Edit (diseño) / Run (trabajo).
         let header = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         header.set_margin_bottom(4);
         let name = gtk::Label::new(Some(&step.name));
@@ -191,10 +233,12 @@ impl StepPanel {
         name.add_css_class("opm-step-name");
         let edit = gtk::Button::with_label("Edit");
         edit.set_tooltip_text(Some("Edit step"));
+        edit.set_visible(caps.structural_edit);
+        edit.set_sensitive(caps.structural_edit && !running);
         let run = gtk::Button::with_label("Run");
         run.set_tooltip_text(Some("Run step"));
-        edit.set_sensitive(!running);
-        run.set_sensitive(!running);
+        run.set_visible(caps.run);
+        run.set_sensitive(caps.run && !running);
         {
             let on_edit = Rc::clone(&self.callbacks.on_edit);
             let step = step.clone();
@@ -330,12 +374,16 @@ impl StepPanel {
             let key = spec.key.clone();
             Rc::new(move |value: Value| on_param(step_id.clone(), key.clone(), value))
         };
+        // En diseño los editores de valores son SOLO LECTURA (los valores de
+        // ejecución pertenecen a la carpeta de trabajo; aquí se ve el default).
+        let editable = self.caps.get().values;
 
         match spec.kind {
             FieldType::Boolean => {
                 let check = gtk::CheckButton::new();
                 check.set_active(matches!(value, Value::Bool(true)));
                 check.set_halign(gtk::Align::Start);
+                check.set_sensitive(editable);
                 {
                     let commit = Rc::clone(&commit);
                     check.connect_toggled(move |check| commit(Value::Bool(check.is_active())));
@@ -346,6 +394,7 @@ impl StepPanel {
                 let options: Vec<&str> = spec.options.iter().map(String::as_str).collect();
                 let dropdown = gtk::DropDown::from_strings(&options);
                 dropdown.set_halign(gtk::Align::Start);
+                dropdown.set_sensitive(editable);
                 // El valor actual puede no estar en las opciones (sin
                 // default): se muestra la primera sin commitear hasta que
                 // el usuario elija (paridad SPA: sin onChange no hay commit).
@@ -373,6 +422,7 @@ impl StepPanel {
                 let entry = gtk::Entry::new();
                 entry.set_text(&value_to_text(value));
                 entry.set_hexpand(true);
+                entry.set_sensitive(editable);
                 if let (Some(min), Some(max)) = (spec.min, spec.max) {
                     entry.set_tooltip_text(Some(&format!("min: {min}, max: {max}")));
                 } else if let Some(min) = spec.min {
