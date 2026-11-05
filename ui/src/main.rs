@@ -1521,6 +1521,18 @@ impl Commands for AppCmds {
     }
 
     fn save(&self) {
+        // Despacho por la página visible (paridad con `close_tab`, P2-10):
+        // la página Pipeline de una ventana de Diseño guarda el documento de
+        // diseño; el editor guarda la pestaña de texto; imágenes y la página
+        // Pipeline de una ventana de trabajo no tienen nada que guardar.
+        match save_target(self.scope.is_design(), &self.center_view.borrow()) {
+            SaveTarget::PipelineDoc => {
+                self.save_pipeline_doc(false);
+                return;
+            }
+            SaveTarget::Nothing => return,
+            SaveTarget::TextTab => {}
+        }
         let result = self.tabs.borrow_mut().save_active();
         match result {
             Ok(()) => self.reload_active(),
@@ -1567,6 +1579,14 @@ impl Commands for AppCmds {
     }
 
     fn save_as(&self) {
+        match save_target(self.scope.is_design(), &self.center_view.borrow()) {
+            SaveTarget::PipelineDoc => {
+                self.save_pipeline_doc(true);
+                return;
+            }
+            SaveTarget::Nothing => return,
+            SaveTarget::TextTab => {}
+        }
         let Some(me) = self.slot() else { return };
         let window = self.window.clone();
         let suggested = {
@@ -2081,6 +2101,26 @@ fn save_confirmed_and_reload(
 fn active_is_markdown(tabs: &RefCell<TabManager>) -> bool {
     let tabs = tabs.borrow();
     path_is_markdown(tabs.active().path.as_deref())
+}
+
+/// Destino del comando «Save»/«Save As» según la página visible (paridad con
+/// el despacho de `close_tab`, P2-10): en una ventana de Diseño la página
+/// Pipeline guarda el documento de diseño (la biblioteca), no la pestaña de
+/// texto activa — que era la ruta que acababa generando `untitled*.txt`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SaveTarget {
+    PipelineDoc,
+    TextTab,
+    Nothing,
+}
+
+fn save_target(is_design: bool, view: &CenterView) -> SaveTarget {
+    match view {
+        CenterView::Pipeline if is_design => SaveTarget::PipelineDoc,
+        CenterView::Pipeline => SaveTarget::Nothing,
+        CenterView::Image(_) => SaveTarget::Nothing,
+        CenterView::Editor => SaveTarget::TextTab,
+    }
 }
 
 /// Raíz que alimenta las opciones «From output» del diálogo de paso
@@ -3251,5 +3291,31 @@ mod tests {
         assert_eq!(root, opm_fs::canonicalize(&folder).unwrap());
 
         let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    /// «Save»/«Save As» despachan por la página visible: la página Pipeline
+    /// de una ventana de Diseño guarda el documento de diseño (la biblioteca)
+    /// y nunca genera un `untitled*.txt` por la pestaña de texto activa.
+    #[test]
+    fn save_despacha_por_pagina_visible() {
+        // Diseño + Pipeline: el documento de diseño.
+        assert_eq!(
+            save_target(true, &CenterView::Pipeline),
+            SaveTarget::PipelineDoc
+        );
+        // Editor: la pestaña de texto, en cualquier ventana.
+        assert_eq!(save_target(true, &CenterView::Editor), SaveTarget::TextTab);
+        assert_eq!(save_target(false, &CenterView::Editor), SaveTarget::TextTab);
+        // Trabajo/carpeta/standalone con la página Pipeline: nada que guardar
+        // (el documento es de solo lectura).
+        assert_eq!(
+            save_target(false, &CenterView::Pipeline),
+            SaveTarget::Nothing
+        );
+        // Imágenes: nada que guardar.
+        assert_eq!(
+            save_target(false, &CenterView::Image(PathBuf::from("a.png"))),
+            SaveTarget::Nothing
+        );
     }
 }
