@@ -167,6 +167,7 @@ python3 scripts/test_release.py
 - [CI](docs/CI.md): CI/release workflows and how to cut a release.
 - [Publishing](docs/PUBLISHING.md): packaged artifacts and maintainer notes.
 - [Pipeline storage design](docs/PIPELINE_STORAGE.md): pipeline library and consolidated work persistence (implemented; see `DECISIONS.md`).
+- [Manual QA suite](docs/qa/README.md): manual test cases and execution records for the desktop application.
 - [Example](examples/README.md): one self-contained JSON pipeline and a fresh-work walkthrough.
 - [Git Guidelines](GITGUIDELINES.md): branch, test, changelog, release, and repository protection policy.
 - [Changelog](CHANGELOG.md): notable changes by version.
