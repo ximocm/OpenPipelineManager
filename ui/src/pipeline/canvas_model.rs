@@ -205,13 +205,24 @@ impl Node {
     }
 }
 
-/// Datos de entrada del modelo (se construyen desde el snapshot del store).
+/// Origen de los datos del lienzo: fija el mensaje del estado vacío (§6).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CanvasContext {
+    /// Sin fuente de pipeline (estado inicial; nunca se pinta en producción).
+    #[default]
+    Closed,
+    /// Ventana de diseño: el documento de librería en memoria.
+    Design,
+    /// Ventana de trabajo: la definición-snapshot de `run.json`.
+    Work,
+}
+
+/// Datos de entrada del modelo (desde el snapshot del store o del documento
+/// de diseño).
 #[derive(Clone, Debug, Default)]
 pub struct CanvasData {
-    /// `project_path` del snapshot: vacío = no hay proyecto abierto.
-    pub project_path: String,
-    /// ¿El proyecto tiene pipeline importado?
-    pub has_pipeline: bool,
+    /// Origen de los datos (fija el mensaje del estado vacío).
+    pub context: CanvasContext,
     pub steps: Vec<PipelineStep>,
     pub states: HashMap<String, StepState>,
     pub layout: HashMap<String, Position>,
@@ -219,11 +230,15 @@ pub struct CanvasData {
 }
 
 impl CanvasData {
-    /// Construye los datos desde el snapshot del store + la selección actual.
-    pub fn new(snapshot: &ProjectSnapshot, selected: Option<&str>) -> Self {
+    /// Construye los datos desde un snapshot (store de trabajo o diseño) y la
+    /// selección actual.
+    pub fn new(
+        context: CanvasContext,
+        snapshot: &ProjectSnapshot,
+        selected: Option<&str>,
+    ) -> Self {
         Self {
-            project_path: snapshot.project_path.clone(),
-            has_pipeline: snapshot.pipeline.is_some(),
+            context,
             steps: snapshot
                 .pipeline
                 .as_ref()
@@ -235,14 +250,19 @@ impl CanvasData {
         }
     }
 
-    /// Mensaje del estado vacío del lienzo (§6).
+    /// Mensaje del estado vacío del lienzo (§6), según la ventana.
     pub fn empty_message(&self) -> Option<String> {
-        if self.project_path.is_empty() {
-            Some("No project open — use Project ▸ New project or Open project".to_owned())
-        } else if !self.has_pipeline {
-            Some("No pipeline imported — use Import pipeline".to_owned())
-        } else {
-            None
+        if !self.steps.is_empty() {
+            return None;
+        }
+        match self.context {
+            CanvasContext::Closed => Some("No pipeline open".to_owned()),
+            CanvasContext::Design => {
+                Some("No steps yet — use Pipeline ▸ Create step".to_owned())
+            }
+            CanvasContext::Work => {
+                Some("This work folder has no pipeline steps".to_owned())
+            }
         }
     }
 }
@@ -690,8 +710,7 @@ mod tests {
 
     fn data(steps: Vec<PipelineStep>) -> CanvasData {
         CanvasData {
-            project_path: "/proy".to_owned(),
-            has_pipeline: true,
+            context: CanvasContext::Work,
             steps,
             states: HashMap::new(),
             layout: HashMap::new(),
@@ -986,15 +1005,40 @@ mod tests {
         assert_eq!(points.last().copied(), Some(output.to));
     }
 
-    /// Estados vacíos del lienzo (§6).
+    /// Estados vacíos del lienzo (§6) por tipo de ventana.
     #[test]
     fn mensajes_de_estado_vacio() {
         let mut data = CanvasData::default();
-        assert!(data.empty_message().unwrap().contains("No project open"));
-        data.project_path = "/proy".into();
-        assert!(data.empty_message().unwrap().contains("No pipeline imported"));
-        data.has_pipeline = true;
+        assert_eq!(data.empty_message().as_deref(), Some("No pipeline open"));
+        data.context = CanvasContext::Design;
+        assert!(data.empty_message().unwrap().contains("Create step"));
+        data.context = CanvasContext::Work;
+        assert!(data.empty_message().unwrap().contains("work folder"));
+        // Con pasos dibujados no hay mensaje.
+        data.steps.push(step("s1"));
         assert_eq!(data.empty_message(), None);
+    }
+
+    /// Oculto-acoplamiento #8: el modelo del lienzo se construye desde un
+    /// `PipelineDoc` de DISEÑO — sin store, sin `project_path` y sin ninguna
+    /// carpeta de trabajo — con selección y layout del documento.
+    #[test]
+    fn lienzo_de_diseño_desde_documento_sin_trabajo() {
+        use crate::pipeline::DesignState;
+        let mut design = DesignState::new("lienzo");
+        design.create_step(step("s1")).unwrap();
+        design.create_step(step("s2")).unwrap();
+
+        let snapshot = design.snapshot(Vec::new());
+        let data = CanvasData::new(CanvasContext::Design, &snapshot, Some("s2"));
+        let model = CanvasModel::build(&data);
+        assert_eq!(model.nodes.len(), 2, "nodos del documento de diseño");
+        assert_eq!(model.empty, None, "hay pasos: sin estado vacío");
+        assert!(model.nodes[0].active == false && model.nodes[1].active);
+        // Layout del documento (80 / 410) sin ningún store de por medio.
+        assert_eq!(model.nodes[0].position, (80.0, NODE_START_Y));
+        assert_eq!(model.nodes[1].position, (410.0, NODE_START_Y));
+        assert!(!model.edges.is_empty(), "orden/deps clasificados");
     }
 
     /// Colores hexadecimales.

@@ -13,11 +13,13 @@
 
 use std::rc::Rc;
 
+use crate::tabs::WindowScope;
 use gtk4 as gtk;
 use gtk4::gio;
 use gtk4::prelude::*;
 
-/// Comandos del shell (§36).
+/// Comandos del shell (§36, superficie librería/trabajo de
+/// pipeline-storage).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Command {
     New,
@@ -37,16 +39,24 @@ pub enum Command {
     ToggleMode,
     /// Muestra/oculta el explorador de archivos (§14.3, §39: `Ctrl+B`).
     ToggleExplorer,
-    /// Crea un proyecto y abre su ventana (§6, Project ▸ New project).
-    NewProject,
-    /// Abre un proyecto existente validando `project.config.json` (§6).
-    OpenProject,
-    /// Importa un fichero `.yml`/`.yaml`/`.json` al proyecto (§6).
+    /// Diseño: crea un documento de pipeline en memoria y abre su ventana.
+    NewPipeline,
+    /// Diseño: abre un documento de la librería en una ventana de diseño.
+    OpenPipeline,
+    /// Diseño: importa un `.yml`/`.yaml`/`.json` a la librería.
     ImportPipeline,
-    /// Relee el árbol del explorador y marca los ficheros abiertos /// cambiados en disco (P2-13, §12.7).
-    Refresh,
-    /// Exporta el pipeline del proyecto a JSON (§6).
+    /// Diseño: exporta el documento a YAML/JSON para compartirlo.
     ExportPipeline,
+    /// Diseño: guarda el documento en la librería (elección ante conflicto).
+    SavePipeline,
+    /// Diseño: guarda el documento con OTRO nombre (duplica deliberadamente).
+    SavePipelineAs,
+    /// Trabajo: elige un pipeline de la librería y una carpeta → `create_work`.
+    NewWork,
+    /// Trabajo: abre una carpeta con `.pipeline-manager/run.json`.
+    OpenWork,
+    /// Trabajo: adopta el documento de la librería (adopt_definition).
+    UpdateFromLibrary,
     /// Abre el diálogo de creación de paso (§6, Pipeline ▸ Create step).
     CreateStep,
     /// Ejecuta los pasos seleccionados (§6, A10: habilitado en reposo).
@@ -74,11 +84,15 @@ impl Command {
             Command::Replace => "win.replace",
             Command::ToggleMode => "win.toggle-mode",
             Command::ToggleExplorer => "win.toggle-explorer",
-            Command::NewProject => "win.new-project",
-            Command::OpenProject => "win.open-project",
+            Command::NewPipeline => "win.new-pipeline",
+            Command::OpenPipeline => "win.open-pipeline",
             Command::ImportPipeline => "win.import-pipeline",
-            Command::Refresh => "win.refresh",
             Command::ExportPipeline => "win.export-pipeline",
+            Command::SavePipeline => "win.save-pipeline",
+            Command::SavePipelineAs => "win.save-as-pipeline",
+            Command::NewWork => "win.new-work",
+            Command::OpenWork => "win.open-work",
+            Command::UpdateFromLibrary => "win.update-from-library",
             Command::CreateStep => "win.create-step",
             Command::RunSelected => "win.run-selected",
             Command::Stop => "win.stop",
@@ -103,11 +117,15 @@ impl Command {
             Command::Replace => "Replace",
             Command::ToggleMode => "Markdown/Visual",
             Command::ToggleExplorer => "Toggle Explorer",
-            Command::NewProject => "New project",
-            Command::OpenProject => "Open project",
+            Command::NewPipeline => "New pipeline",
+            Command::OpenPipeline => "Open pipeline",
             Command::ImportPipeline => "Import pipeline",
-            Command::Refresh => "Refresh",
             Command::ExportPipeline => "Export pipeline",
+            Command::SavePipeline => "Save pipeline",
+            Command::SavePipelineAs => "Save as pipeline",
+            Command::NewWork => "New work",
+            Command::OpenWork => "Open work",
+            Command::UpdateFromLibrary => "Update from library",
             Command::CreateStep => "Create step",
             Command::RunSelected => "Run selected",
             Command::Stop => "Stop",
@@ -135,17 +153,24 @@ pub trait Commands {
     fn toggle_mode(&self);
     /// Muestra/oculta el explorador (§14.3).
     fn toggle_explorer(&self);
-    /// Crea un proyecto (nombre + carpeta padre) y abre su ventana (§6).
-    fn new_project(&self);
-    /// Abre un proyecto existente; carpeta sin `project.config.json` →
-    /// error claro (§6).
-    fn open_project(&self);
-    /// Importa un fichero de pipeline al proyecto abierto (§6).
+    /// Diseño: documento nuevo (nombre + ventana de diseño, sin carpeta).
+    fn new_pipeline(&self);
+    /// Diseño: abre un documento de la librería (browser de la librería).
+    fn open_pipeline(&self);
+    /// Diseño: importa un fichero YAML/JSON a la librería (§6).
     fn import_pipeline(&self);
-    /// Refresco manual (P2-13): árbol del explorador + banderín ⚠ de los /// ficheros abiertos cambiados en disco.
-    fn refresh(&self);
-    /// Exporta el pipeline abierto a JSON (§6).
+    /// Diseño: exporta el documento abierto a YAML/JSON (§6).
     fn export_pipeline(&self);
+    /// Diseño: guarda el documento en la librería (conflicto explícito).
+    fn save_pipeline(&self);
+    /// Diseño: guarda con otro nombre (duplica deliberadamente).
+    fn save_pipeline_as(&self);
+    /// Trabajo: pipeline de la librería + carpeta → `create_work`.
+    fn new_work(&self);
+    /// Trabajo: carpeta con `run.json` → `open_work`.
+    fn open_work(&self);
+    /// Trabajo: adopta el documento de la librería en esta carpeta.
+    fn update_from_library(&self);
     /// Abre el diálogo de creación de paso (§6).
     fn create_step(&self);
     /// Ejecuta los pasos seleccionados — o los no `ok` si no hay selección
@@ -187,11 +212,15 @@ pub const ALL_COMMANDS: &[Command] = &[
     Command::Replace,
     Command::ToggleMode,
     Command::ToggleExplorer,
-    Command::NewProject,
-    Command::OpenProject,
+    Command::NewPipeline,
+    Command::OpenPipeline,
     Command::ImportPipeline,
-    Command::Refresh,
     Command::ExportPipeline,
+    Command::SavePipeline,
+    Command::SavePipelineAs,
+    Command::NewWork,
+    Command::OpenWork,
+    Command::UpdateFromLibrary,
     Command::CreateStep,
     Command::RunSelected,
     Command::Stop,
@@ -206,8 +235,8 @@ type SectionSpec = &'static [EntrySpec];
 /// Submenú puro §36: `(título, secciones)`.
 type SubmenuSpec = (&'static str, &'static [SectionSpec]);
 
-/// Modelo de menú §36 en datos puros: File, Project, Edit, Pipeline, View y
-/// Help.
+/// Modelo de menú §36 en datos puros: File, Project (librería/trabajo),
+/// Edit, Pipeline, View y Help.
 const MENUBAR_SPEC: &[SubmenuSpec] = &[
     (
         "File",
@@ -222,13 +251,23 @@ const MENUBAR_SPEC: &[SubmenuSpec] = &[
     ),
     (
         "Project",
-        &[&[
-            ("New project", "win.new-project"),
-            ("Open project", "win.open-project"),
-            ("Import pipeline", "win.import-pipeline"),
-            ("Export pipeline", "win.export-pipeline"),
-            ("Refresh", "win.refresh"),
-        ]],
+        &[
+            &[
+                ("New pipeline", "win.new-pipeline"),
+                ("Open pipeline", "win.open-pipeline"),
+                ("Import pipeline", "win.import-pipeline"),
+                ("Export pipeline", "win.export-pipeline"),
+            ],
+            &[
+                ("Save pipeline", "win.save-pipeline"),
+                ("Save as pipeline", "win.save-as-pipeline"),
+            ],
+            &[
+                ("New work", "win.new-work"),
+                ("Open work", "win.open-work"),
+                ("Update from library", "win.update-from-library"),
+            ],
+        ],
     ),
     (
         "Edit",
@@ -293,11 +332,15 @@ fn dispatch(cmd: Command, host: &dyn Commands) {
         Command::Replace => host.replace(),
         Command::ToggleMode => host.toggle_mode(),
         Command::ToggleExplorer => host.toggle_explorer(),
-        Command::NewProject => host.new_project(),
-        Command::OpenProject => host.open_project(),
+        Command::NewPipeline => host.new_pipeline(),
+        Command::OpenPipeline => host.open_pipeline(),
         Command::ImportPipeline => host.import_pipeline(),
-        Command::Refresh => host.refresh(),
         Command::ExportPipeline => host.export_pipeline(),
+        Command::SavePipeline => host.save_pipeline(),
+        Command::SavePipelineAs => host.save_pipeline_as(),
+        Command::NewWork => host.new_work(),
+        Command::OpenWork => host.open_work(),
+        Command::UpdateFromLibrary => host.update_from_library(),
         Command::CreateStep => host.create_step(),
         Command::RunSelected => host.run_selected(),
         Command::Stop => host.stop(),
@@ -305,6 +348,68 @@ fn dispatch(cmd: Command, host: &dyn Commands) {
         Command::Shortcuts => host.shortcuts(),
     }
 }
+
+/// ¿El comando está habilitado en una ventana de este ámbito? (Acoplamiento
+/// oculto #2: las acciones de librería/trabajo dejan de ser «error al
+/// despachar» y se deshabilitan VISIBLEMENTE por tipo de ventana.)
+///
+/// - Diseño deshabilita la superficie de trabajo (salvo spawn de ventanas)
+///   y habilita la propia; trabajo deshabilita la superficie de diseño.
+/// - Guardar/Exportar/Crear paso actúan sobre el documento de DISEÑO
+///   abierto: solo en ventanas de diseño.
+/// - Actualizar/Run/Stop actúan sobre la carpeta de TRABAJO: solo en
+///   ventanas de trabajo (Stop además exige ejecución en curso).
+/// - Las ventanas standalone/folder son neutrales: pueden crear diseños y
+///   lanzar trabajos nuevos, pero no mutar ninguno de los dos dominios.
+/// - Con una ejecución en curso se retienen los comandos que abren o
+///   sustituyen dominios (paridad con el gating previo de `apply_running_ui`).
+pub fn enabled_for(cmd: Command, scope: &WindowScope, running: bool) -> bool {
+    use Command::*;
+    let in_kind = match cmd {
+        // Superficie de diseño: deshabilitada en ventanas de trabajo.
+        NewPipeline | OpenPipeline | ImportPipeline => !scope.is_work(),
+        ExportPipeline | SavePipeline | SavePipelineAs | CreateStep => scope.is_design(),
+        // Crear/abrir trabajo es neutro: lleva el diseño a ejecución desde
+        // cualquier ventana (solo se retiene durante una ejecución).
+        NewWork | OpenWork => true,
+        UpdateFromLibrary | RunSelected => scope.is_work(),
+        Stop => scope.is_work() && running,
+        // Abrir carpeta: propio de ventanas con explorador, pero el spawn es
+        // neutral — solo se retiene en ejecución (paridad §11 A12).
+        OpenFolder => true,
+        // El resto (texto/editores/ayuda) no dependen del ámbito.
+        _ => true,
+    };
+    if !in_kind {
+        return false;
+    }
+    !running
+        || !matches!(
+            cmd,
+            NewPipeline | OpenPipeline | ImportPipeline | CreateStep | NewWork | OpenWork
+                | UpdateFromLibrary | RunSelected | OpenFolder
+        )
+}
+
+/// Comandos cuya sensibilidad depende del ámbito/ejecución (los evalúa
+/// [`enabled_for`] `AppCmds::apply_command_gate`); el resto de comandos son
+/// neutrales y nunca se tocan desde el gate (p. ej. `toggle-mode`, que
+/// depende del tipo del tab activo).
+pub const GATED_COMMANDS: &[Command] = &[
+    Command::NewPipeline,
+    Command::OpenPipeline,
+    Command::ImportPipeline,
+    Command::ExportPipeline,
+    Command::SavePipeline,
+    Command::SavePipelineAs,
+    Command::NewWork,
+    Command::OpenWork,
+    Command::UpdateFromLibrary,
+    Command::CreateStep,
+    Command::RunSelected,
+    Command::Stop,
+    Command::OpenFolder,
+];
 
 /// Construye el grupo de acciones `win.*` de la ventana: cada comando se
 /// registra sin parámetro en un [`gio::SimpleActionGroup`] insertado con el
@@ -407,8 +512,8 @@ mod tests {
         assert_eq!(vistos.len(), ALL_COMMANDS.len());
     }
 
-    /// §36: estructura exacta del menú — File, Project, Edit, Pipeline, View
-    /// y Help, con los ítems de proyecto/pipeline del §6.
+    /// §36: estructura exacta del menú — File, Project (librería/trabajo),
+    /// Edit, Pipeline, View y Help con los ítems de pipeline-storage.
     #[test]
     fn estructura_menu_36() {
         let esperado: &[(&str, &[&[(&str, &str)]])] = &[
@@ -425,13 +530,23 @@ mod tests {
             ),
             (
                 "Project",
-                &[&[
-                    ("New project", "win.new-project"),
-                    ("Open project", "win.open-project"),
-                    ("Import pipeline", "win.import-pipeline"),
-                    ("Export pipeline", "win.export-pipeline"),
-                    ("Refresh", "win.refresh"),
-                ]],
+                &[
+                    &[
+                        ("New pipeline", "win.new-pipeline"),
+                        ("Open pipeline", "win.open-pipeline"),
+                        ("Import pipeline", "win.import-pipeline"),
+                        ("Export pipeline", "win.export-pipeline"),
+                    ],
+                    &[
+                        ("Save pipeline", "win.save-pipeline"),
+                        ("Save as pipeline", "win.save-as-pipeline"),
+                    ],
+                    &[
+                        ("New work", "win.new-work"),
+                        ("Open work", "win.open-work"),
+                        ("Update from library", "win.update-from-library"),
+                    ],
+                ],
             ),
             (
                 "Edit",
@@ -568,5 +683,117 @@ mod tests {
         ] {
             assert!(!accel_es_valido(malo), "{malo:?} no debería validar");
         }
+    }
+
+    /// Habilitación por tipo de ventana (acoplamiento oculto #2): las
+    /// acciones de diseño están deshabilitadas en ventanas de trabajo y las
+    /// de trabajo en ventanas de diseño; guardar/exportar/crear-paso solo
+    /// actúan sobre un documento de diseño abierto y actualizar/run/stop solo
+    /// sobre una carpeta de trabajo.
+    #[test]
+    fn habilitacion_por_tipo_de_ventana() {
+        use Command::*;
+        let design = WindowScope::Design;
+        let work = WindowScope::Work(std::path::PathBuf::from("/tmp/trabajo"));
+        let folder = WindowScope::Folder(std::path::PathBuf::from("/tmp/carpeta"));
+        let standalone = WindowScope::Standalone;
+        let scopes = [&design, &work, &folder, &standalone];
+
+        // Acciones SOLO de diseño: habilitadas en diseño, NO en trabajo.
+        for cmd in [
+            ExportPipeline,
+            SavePipeline,
+            SavePipelineAs,
+            CreateStep,
+        ] {
+            assert!(enabled_for(cmd, &design, false), "{cmd:?} en diseño");
+            assert!(
+                !enabled_for(cmd, &work, false),
+                "{cmd:?} debe estar deshabilitado en trabajo"
+            );
+        }
+        // Superficie de diseño (spawn sobre la librería): nunca en trabajo.
+        for cmd in [NewPipeline, OpenPipeline, ImportPipeline] {
+            for scope in [&design, &folder, &standalone] {
+                assert!(enabled_for(cmd, scope, false), "{cmd:?} en {scope:?}");
+            }
+            assert!(!enabled_for(cmd, &work, false), "{cmd:?} en trabajo");
+        }
+        // Crear/abrir trabajo disponible en cualquier ventana; run exige trabajo.
+        for cmd in [NewWork, OpenWork] {
+            for scope in [&design, &work, &folder, &standalone] {
+                assert!(enabled_for(cmd, scope, false), "{cmd:?} en {scope:?}");
+            }
+        }
+        for cmd in [UpdateFromLibrary, RunSelected] {
+            assert!(enabled_for(cmd, &work, false), "{cmd:?} en trabajo");
+            for scope in [&design, &folder, &standalone] {
+                assert!(!enabled_for(cmd, scope, false), "{cmd:?} en {scope:?}");
+            }
+        }
+        // Stop: solo trabajo Y con ejecución en curso.
+        assert!(!enabled_for(Stop, &work, false));
+        assert!(enabled_for(Stop, &work, true));
+        assert!(!enabled_for(Stop, &design, true));
+
+        // Ventanas neutrales (standalone/folder): nada muta dominios.
+        for scope in [&folder, &standalone] {
+            for cmd in [
+                SavePipeline,
+                SavePipelineAs,
+                ExportPipeline,
+                CreateStep,
+                UpdateFromLibrary,
+                RunSelected,
+                Stop,
+            ] {
+                assert!(!enabled_for(cmd, scope, false), "{cmd:?} en {scope:?}");
+            }
+        }
+
+        // Con ejecución en curso se retienen los comandos que abren/sustituyen.
+        for cmd in [NewWork, OpenWork, UpdateFromLibrary, RunSelected, OpenFolder] {
+            assert!(!enabled_for(cmd, &work, true), "{cmd:?} con ejecución");
+        }
+        // Los comandos de texto no dependen del ámbito ni de la ejecución.
+        for cmd in [New, Open, Save, Undo, Find, About] {
+            for scope in scopes {
+                assert!(enabled_for(cmd, scope, true), "{cmd:?} en {scope:?}");
+            }
+        }
+    }
+
+    /// El conjunto de comandos con gate está TODO registrado y contiene
+    /// exactamente las acciones de librería/trabajo + Open Folder (nada se
+    /// queda sin registrar ni sin gate).
+    #[test]
+    fn gated_commands_estan_en_all_commands() {
+        use Command::*;
+        let registrados: Vec<Command> = ALL_COMMANDS.to_vec();
+        for cmd in GATED_COMMANDS {
+            assert!(
+                registrados.contains(cmd),
+                "GATED_COMMANDS sin registrar: {cmd:?}"
+            );
+        }
+        let mut esperado = vec![
+            NewPipeline,
+            OpenPipeline,
+            ImportPipeline,
+            ExportPipeline,
+            SavePipeline,
+            SavePipelineAs,
+            NewWork,
+            OpenWork,
+            UpdateFromLibrary,
+            CreateStep,
+            RunSelected,
+            Stop,
+            OpenFolder,
+        ];
+        esperado.sort_by_key(|cmd| cmd.action_id());
+        let mut gate: Vec<Command> = GATED_COMMANDS.to_vec();
+        gate.sort_by_key(|cmd| cmd.action_id());
+        assert_eq!(gate, esperado);
     }
 }

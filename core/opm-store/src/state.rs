@@ -1,7 +1,10 @@
-//! Persisted state types — port of `backend/app/models/state.py` (§11 A5).
+//! State types — port of `backend/app/models/state.py` (§11 A5).
 //!
 //! Field order inside [`StepState`] mirrors the Pydantic model declaration so
-//! the serialized JSON matches Python's `model_dump()` key order.
+//! the `run.json` section keeps the wire key order (`status`, `selected`,
+//! `exit_code`, `last_run_at`, `message`). These types are serialized only
+//! through the [`crate::envelope`] documents; nothing here reads a legacy
+//! file.
 
 use std::collections::HashMap;
 
@@ -50,8 +53,9 @@ pub struct Position {
 }
 
 /// Step detail payload: `{step, params, state, validation}` (§4 opm-store),
-/// with `validation` filtered to the issues of this step.
-#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+/// with `validation` filtered to the issues of this step. In-memory view
+/// only — validation is recalculated, never persisted.
+#[derive(Clone, Debug, PartialEq)]
 pub struct StepDetail {
     pub step: PipelineStep,
     pub params: ValueMap,
@@ -59,22 +63,15 @@ pub struct StepDetail {
     pub validation: Vec<ValidationIssue>,
 }
 
-/// `ProjectSnapshot` — the `pipeline.project.json` document.
-///
-/// Serialization matches Python's `model_dump(mode="json", by_alias=True)`:
-/// nested pipeline types carry their aliases (`type`, `min`, `max`) and `null`
-/// fields are always written.
-#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
+/// In-memory view of the open work folder for the UI (canvas, step panel):
+/// definition + values + state + recalculated validation. Built from the
+/// embedded `run.json` snapshot; never serialized or persisted itself.
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct ProjectSnapshot {
     pub project_path: String,
-    #[serde(default)]
     pub pipeline: Option<PipelineConfig>,
-    #[serde(default)]
     pub params: HashMap<String, ValueMap>,
-    #[serde(default)]
     pub state: HashMap<String, StepState>,
-    #[serde(default)]
     pub visual_layout: HashMap<String, Position>,
-    #[serde(default)]
     pub validation: Vec<ValidationIssue>,
 }

@@ -18,10 +18,6 @@ use std::fmt;
 use std::fs;
 use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
-
-/// Fichero que marca la raíz como proyecto OPM (`project_tree.py`).
-pub const PROJECT_CONFIG_FILENAME: &str = "project.config.json";
 
 /// Carpetas que las operaciones de árbol nunca listan ni borran
 /// (`project_tree.py:IGNORED_NAMES`).
@@ -35,20 +31,11 @@ pub const IGNORED_NAMES: &[&str] = &[
     ".venv",
 ];
 
-/// Carpetas por defecto del scaffold (`DEFAULT_PROJECT_DIRS`).
-const DEFAULT_PROJECT_DIRS: &[&str] = &["Input", "steps", "outputs"];
-
 /// Sufijos con vista previa de imagen (`IMAGE_SUFFIXES`, sin punto).
 const IMAGE_SUFFIXES: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "svg"];
 
 /// Profundidad máxima del árbol de proyecto (`build_tree(max_depth=5)`).
 const MAX_TREE_DEPTH: usize = 5;
-
-/// Contenido del `config.txt` del scaffold, literal de Python.
-const CONFIG_TXT: &str = "Open Pipeline Manager project\n\n\
-    Input files: Input/\n\
-    Step workspaces: steps/<step-id>/\n\
-    Shared outputs: outputs/\n";
 
 /// Error de una operación de proyecto (los tipos Python se agrupan aquí:
 /// `ValueError` → las variantes de regla, `FileExistsError` →
@@ -74,8 +61,6 @@ pub enum OpsError {
     TargetNotAFile,
     /// Borrado de una carpeta gestionada/ignorada.
     IgnoredName { name: String },
-    /// La carpeta no contiene `project.config.json`.
-    NotAProject,
     /// Nombre de entrada que no es UTF-8 válido (§12.5: error claro, sin
     /// conversiones silenciosas) — solo lo levanta el listado del árbol.
     NotUtf8 { path: PathBuf },
@@ -105,12 +90,6 @@ impl fmt::Display for OpsError {
             Self::TargetNotAFile => write!(f, "Target is not a file"),
             Self::IgnoredName { name } => {
                 write!(f, "Cannot delete managed or ignored folder: {name}")
-            }
-            Self::NotAProject => {
-                write!(
-                    f,
-                    "Folder is not an Open Pipeline Manager project: missing {PROJECT_CONFIG_FILENAME}"
-                )
             }
             Self::NotUtf8 { path } => {
                 write!(
@@ -165,67 +144,6 @@ pub fn safe_segment(value: &str) -> String {
     } else {
         trimmed.to_owned()
     }
-}
-
-/// Crea la estructura de un proyecto en `root` (`ensure_project_scaffold`):
-/// `Input/`, `steps/`, `outputs/`, `project.config.json` (solo si no existe;
-/// `name` es el valor guardado) y `config.txt` (solo si no existe).
-pub fn ensure_project_scaffold(root: &Path, name: &str) -> Result<(), OpsError> {
-    let resolved = resolve_flexible(root)
-        .map_err(|source| OpsError::Io {
-            path: root.to_path_buf(),
-            source,
-        })?;
-    fs::create_dir_all(&resolved).map_err(|source| map_create_err(&resolved, source))?;
-    for dirname in DEFAULT_PROJECT_DIRS {
-        ensure_dir(&resolved.join(dirname))?;
-    }
-    let config = resolved.join(PROJECT_CONFIG_FILENAME);
-    if !config.exists() {
-        write_atomic(&config, scaffold_json(name).as_bytes()).map_err(|source| {
-            OpsError::Io {
-                path: config.clone(),
-                source,
-            }
-        })?;
-    }
-    let config_txt = resolved.join("config.txt");
-    if !config_txt.exists() {
-        write_atomic(&config_txt, CONFIG_TXT.as_bytes()).map_err(|source| {
-            OpsError::Io {
-                path: config_txt.clone(),
-                source,
-            }
-        })?;
-    }
-    Ok(())
-}
-
-/// Valida que `root` es un proyecto OPM (`validate_project_folder`): carpeta
-/// existente con `project.config.json` dentro.
-pub fn validate_project_folder(root: &Path) -> Result<(), OpsError> {
-    let resolved = resolve_flexible(root)
-        .map_err(|source| OpsError::Io {
-            path: root.to_path_buf(),
-            source,
-        })?;
-    match fs::metadata(&resolved) {
-        Err(err) if err.kind() == ErrorKind::NotFound => {
-            return Err(OpsError::NotFound { path: resolved });
-        }
-        Err(source) => {
-            return Err(OpsError::Io {
-                path: resolved,
-                source,
-            });
-        }
-        Ok(meta) if !meta.is_dir() => return Err(OpsError::NotFound { path: resolved }),
-        Ok(_) => {}
-    }
-    if !resolved.join(PROJECT_CONFIG_FILENAME).exists() {
-        return Err(OpsError::NotAProject);
-    }
-    Ok(())
 }
 
 /// `steps/<safe_segment(step_id)>/{input,work,output}`
@@ -1144,76 +1062,6 @@ fn map_remove_err(path: &Path, source: std::io::Error) -> OpsError {
     }
 }
 
-/// `json.dumps(..., indent=2)` para el `project.config.json`, con el orden de
-/// claves y el `ensure_ascii` de Python.
-fn scaffold_json(name: &str) -> String {
-    format!(
-        "{{\n  \"name\": {},\n  \"version\": 1,\n  \"created_at\": \"{}\",\n  \"folders\": {{\n    \"input\": \"Input\",\n    \"steps\": \"steps\",\n    \"outputs\": \"outputs\"\n  }}\n}}",
-        json_string(name),
-        utc_iso_now(),
-    )
-}
-
-/// Cadena JSON al estilo `json.dumps` (ASCII escapado por unidades UTF-16).
-fn json_string(value: &str) -> String {
-    let mut out = String::from("\"");
-    for unit in value.encode_utf16() {
-        match unit {
-            0x22 => out.push_str("\\\""), // "
-            0x5c => out.push_str("\\\\"), // \
-            0x08 => out.push_str("\\b"),
-            0x0c => out.push_str("\\f"),
-            0x0a => out.push_str("\\n"),
-            0x0d => out.push_str("\\r"),
-            0x09 => out.push_str("\\t"),
-            0..=0x1f => out.push_str(&format!("\\u{unit:04x}")),
-            unit if unit < 0x80 => out.push(unit as u8 as char),
-            unit => out.push_str(&format!("\\u{unit:04x}")),
-        }
-    }
-    out.push('"');
-    out
-}
-
-/// Marca de tiempo UTC tipo ISO-8601 (formato `datetime.now(timezone.utc)
-/// .isoformat()`: microsegundos solo si son distintos de cero).
-fn utc_iso_now() -> String {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default();
-    let secs = now.as_secs();
-    let micros = now.subsec_micros();
-    let days = (secs / 86_400) as i64;
-    let rem = secs % 86_400;
-    let (year, month, day) = civil_from_days(days);
-    let (hour, minute, second) = (rem / 3_600, (rem % 3_600) / 60, rem % 60);
-    if micros == 0 {
-        format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}+00:00")
-    } else {
-        format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{micros:06}+00:00")
-    }
-}
-
-/// Días desde el epoch a fecha civil (algoritmo de días propios de Howard
-/// Hinnant).
-fn civil_from_days(days: i64) -> (i64, u32, u32) {
-    let shifted = days + 719_468;
-    let era = if shifted >= 0 { shifted } else { shifted - 146_096 } / 146_097;
-    let day_of_era = (shifted - era * 146_097) as u64;
-    let year_of_era =
-        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
-    let year = year_of_era as i64 + era * 400;
-    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
-    let month_index = (5 * day_of_year + 2) / 153;
-    let day = (day_of_year - (153 * month_index + 2) / 5 + 1) as u32;
-    let month = if month_index < 10 {
-        month_index + 3
-    } else {
-        month_index - 9
-    } as u32;
-    (if month <= 2 { year + 1 } else { year }, month, day)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1235,18 +1083,6 @@ mod tests {
         assert_eq!(safe_segment("100%_done"), "100_done");
         assert_eq!(safe_segment("a/b\\c"), "a_b_c");
         assert_eq!(safe_segment("a__b___c"), "a_b_c");
-    }
-
-    #[test]
-    fn scaffold_json_matches_python_shape() {
-        let json = scaffold_json("My \"Pipe\"");
-        assert!(json.starts_with("{\n  \"name\": \"My \\\"Pipe\\\"\",\n  \"version\": 1,\n  \"created_at\": \""));
-        assert!(json.contains("\"20"));
-        assert!(json.ends_with(
-            "\"folders\": {\n    \"input\": \"Input\",\n    \"steps\": \"steps\",\n    \"outputs\": \"outputs\"\n  }\n}"
-        ));
-        // ensure_ascii de Python: no-ASCII → \uXXXX.
-        assert_eq!(json_string("café"), "\"caf\\u00e9\"");
     }
 
     /// F5: el camino CREATE abre con `create_new` — probado DIRECTAMENTE para

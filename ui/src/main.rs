@@ -1,15 +1,20 @@
 //! opm — aplicación de escritorio GTK4 de Open Pipeline Manager.
 //!
 //! Integra el workspace `core/` con la shell de la aplicación (menús,
-//! editor, pestañas y explorador):
-//! - menús §36 (File, Edit, View, Help) y atajos §39 (clon en `menus`);
+//! editor, pestañas y explorador) sobre la persistencia `pipeline-storage`:
+//! - menús §36 (File, Project de librería/trabajo, Edit, Pipeline, View,
+//!   Help) y atajos §39 (clon en `menus`);
+//! - CUATRO tipos de ventana (§6, `tabs::WindowScope`): standalone de
+//!   texto, DISEño de pipelines sin carpeta de trabajo (documento `.pipeline`
+//!   en memoria con suciedad explícita), carpeta exploradora pura y TRABAJO
+//!   sobre una carpeta con `.pipeline-manager/run.json`;
 //! - editor con Markdown Mode + modo Visual §8.2 y despacho de highlighting
 //!   por extensión (§5: Markdown → `opm_parser`, YAML/JSON/shell/FASTA →
 //!   `crate::syntax`, resto sin resaltado);
 //! - pestañas §37 con indicador `●` de modificado y guardado explícito
 //!   (§3.6, §12.7);
 //! - explorador de archivos con árbol perezoso (§14.3–§14.7) y operaciones
-//!   del proyecto delegadas en `opm-fs` (§14.8);
+//!   sobre la carpeta delegadas en `opm-fs` (§14.8);
 //! - barra de búsqueda/reemplazo del archivo actual (§40.1);
 //! - diálogos GTK4 y confirmaciones explícitas (§3.7, §12.7).
 //!
@@ -19,8 +24,9 @@
 //! ventana re-`load()`eado en cada cambio de tab, y guardas de cierre con
 //! referencias débiles (§11 A12).
 //!
-//! Los dominios de proyecto, pipeline y ejecución viven en `project/`,
-//! `pipeline/` y `runs/`, cableados desde este módulo.
+//! Los dominios de librería/trabajo, pipeline y ejecución viven en
+//! `project/`, `pipeline/` (con el modelo de diseño en `pipeline/design.rs`)
+//! y `runs/`, cableados desde este módulo.
 
 mod appstate;
 mod editor;
@@ -43,7 +49,10 @@ use explorer::{
 };
 use find::{FindAction, FindBar};
 use menus::{build_menubar, dialogs, install_actions, ACCELERATORS, Commands};
-use pipeline::{CanvasCallbacks, CanvasData, PipelineCanvas, StepCallbacks, StepDraft, StepPanel};
+use pipeline::{
+    CanvasCallbacks, CanvasContext, CanvasData, DesignState, PipelineCanvas, StepCallbacks,
+    StepDraft, StepCaps, StepPanel,
+};
 use runs::{drain, format_blocked, Counters, LogsPanel, RunModel};
 use tabs::{OpenTarget, TabBar, TabManager, WindowScope};
 
@@ -56,8 +65,10 @@ use gtk4::{
 use opm_document::{Position, Selection};
 use opm_exec::{ExecError, ExecutionManager};
 use opm_fs::FsError;
-use opm_pipeline::{PipelineStep, Value};
-use opm_store::ProjectStore;
+use opm_pipeline::{PipelineConfig, PipelineStep, ValidationIssue, Value};
+use opm_store::{
+    AdoptReport, ExportFormat, PipelineDoc, ProjectStore, SaveMode, StoreError,
+};
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -94,9 +105,9 @@ impl EditSink for Sink {
 }
 
 /// Página visible del stack central (§11 A11): la pestaña «Pipeline» es
-/// PERMANENTE en ventanas de proyecto, el editor comparte una sola página
-/// con el tab activo y cada imagen vive en su propia página (nunca en
-/// `TabManager`).
+/// PERMANENTE en ventanas con superficie de pipeline (diseño/trabajo), el
+/// editor comparte una sola página con el tab activo y cada imagen vive en
+/// su propia página (nunca en `TabManager`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum CenterView {
     Pipeline,
@@ -108,7 +119,8 @@ enum CenterView {
 struct AppCmds {
     app: Application,
     window: ApplicationWindow,
-    /// Ámbito de esta ventana (ISSUE-021): standalone o con explorador.
+    /// Ámbito de esta ventana (ISSUE-021): standalone, diseño, carpeta o
+    /// trabajo.
     scope: WindowScope,
     tabs: Rc<RefCell<TabManager>>,
     /// Único panel de edición por ventana (§5): re-`load()` en cada cambio.
@@ -116,15 +128,22 @@ struct AppCmds {
     tab_bar: Rc<TabBar>,
     /// Barra de búsqueda/reemplazo del archivo actual (§40.1).
     find_bar: Rc<FindBar>,
-    /// Explorador (solo ventanas de proyecto), su caja-panel enmarcada y el
+    /// Explorador (solo ventanas con carpeta), su caja-panel enmarcada y el
     /// `Paned` cuyo hijo inicial es esa caja (`toggle_explorer`).
     explorer: Option<Rc<ExplorerPane>>,
     explorer_panel: Option<GtkBox>,
     explorer_paned: Option<Paned>,
     explorer_visible: Cell<bool>,
     explorer_state: RefCell<ExplorerState>,
-    /// Store del proyecto de ESTA ventana (compartido con el motor, A6).
+    /// Store de la carpeta de trabajo de ESTA ventana (compartido con el
+    /// motor, A6). Vacío en ventanas sin trabajo abierto.
     store: Arc<ProjectStore>,
+    /// Documento de diseño EN MEMORIA (solo ventanas de diseño): edición
+    /// sin carpeta de trabajo, con seguimiento de suciedad; nada toca disco
+    /// hasta Save/Export.
+    design: Option<RefCell<DesignState>>,
+    /// Etiqueta del toolbar de diseño (`<nombre>.pipeline · librería`).
+    design_label: Option<gtk4::Label>,
     /// Motor de ejecución de esta ventana (§4 opm-exec, A6: `Arc` store).
     exec: Rc<ExecutionManager>,
     /// Reducer puro de los eventos del motor (§11 A12: tick de 250 ms).
@@ -344,7 +363,8 @@ impl AppCmds {
     // --- Título, ventanas y pestañas --------------------------------------
 
     /// Título observable de la ventana (§3.7): tab activo + ámbito (ISSUE-021)
-    /// + modo Visual cuando el tab activo lo usa.
+    /// + modo Visual cuando el tab activo lo usa. En diseño el ámbito es el
+    /// documento de librería (`<nombre>.pipeline`).
     fn update_title(&self) {
         let (title, mode) = {
             let tabs = self.tabs.borrow();
@@ -353,7 +373,16 @@ impl AppCmds {
         };
         let text = match &self.scope {
             WindowScope::Standalone => format!("{title} — OPM"),
-            WindowScope::Project(root) => {
+            WindowScope::Design => {
+                // El punto ● comunica cambios sin guardar en el documento
+                // (misma convención que las pestañas de texto, §37).
+                let dirty = if self.design_dirty() { " ●" } else { "" };
+                format!(
+                    "{title} — OPM · {}.pipeline{dirty}",
+                    self.design_display_name()
+                )
+            }
+            WindowScope::Folder(root) | WindowScope::Work(root) => {
                 let name = root
                     .file_name()
                     .map(|n| n.to_string_lossy().into_owned())
@@ -450,6 +479,15 @@ impl AppCmds {
         }
     }
 
+    /// Refresh (P2-13, botón del explorador): marca con ⚠ los ficheros
+    /// abiertos que cambiaron en disco (huella del LocalFs, §12.7 — sin
+    /// recargar ningún buffer) y relee el árbol (los outputs generados
+    /// aparecen sin reiniciar).
+    fn refresh(&self) {
+        self.tabs.borrow_mut().mark_external_changes();
+        self.refresh_explorer();
+    }
+
     /// Operaciones §14.8 del explorador sobre el nodo `target`
     /// (`None` = raíz del proyecto), delegadas en las ops de `opm-fs`.
     fn explorer_op(&self, action: ExplorerAction, target: Option<PathBuf>) {
@@ -506,7 +544,7 @@ impl AppCmds {
                             }
                             Err(err) => show_error(&window, &err.to_string()),
                         },
-                        None => show_error(&window, "la ruta sale del proyecto"),
+                        None => show_error(&window, "the path leaves the folder"),
                     }
                 });
             }
@@ -707,28 +745,88 @@ impl AppCmds {
 }
 
 impl AppCmds {
-    // --- Dominio de proyecto (§6) -----------------------------------------
+    // --- Dominio de pipeline (§6, pipeline-storage) ------------------------
 
-    /// ¿El store tiene un proyecto abierto? Si no, muestra el error claro
-    /// del §6 y devuelve `false` (los comandos de proyecto se niegan).
-    fn require_project(&self) -> bool {
-        if self.store.project_root().is_ok() {
-            return true;
-        }
-        show_error(
-            &self.window,
-            "No project open — use Project ▸ New project or Open project",
-        );
-        false
+    /// ¿Hay un documento de diseño en memoria?
+    fn design(&self) -> Option<&RefCell<DesignState>> {
+        self.design.as_ref()
     }
 
-    /// Refresco del dominio (canvas, panel, contadores) SIN tocar los
+    /// Nombre mostrable del documento de diseño (sin `.pipeline`).
+    fn design_display_name(&self) -> String {
+        self.design()
+            .map(|cell| {
+                let name = cell.borrow().display_name().to_owned();
+                if name.is_empty() {
+                    "untitled".to_owned()
+                } else {
+                    name
+                }
+            })
+            .unwrap_or_else(|| "untitled".to_owned())
+    }
+
+    /// ¿El documento de diseño tiene cambios sin guardar?
+    fn design_dirty(&self) -> bool {
+        self.design().is_some_and(|cell| cell.borrow().dirty())
+    }
+
+    /// Contexto del lienzo según el tipo de ventana.
+    fn canvas_context(&self) -> CanvasContext {
+        match self.scope {
+            WindowScope::Design => CanvasContext::Design,
+            WindowScope::Work(_) => CanvasContext::Work,
+            _ => CanvasContext::Closed,
+        }
+    }
+
+    /// Snapshot del dominio visible: el documento de diseño (con su
+    /// validación recalculada SIN carpeta de trabajo) o el store del trabajo
+    /// (con su validación recalculada sobre `run.json`).
+    fn domain_snapshot(&self) -> opm_store::ProjectSnapshot {
+        if let Some(design) = self.design() {
+            let design = design.borrow();
+            let issues = pipeline::design::design_validation(
+                &design.doc().pipeline,
+                &project::library_root(),
+            );
+            design.snapshot(issues)
+        } else {
+            self.store.snapshot()
+        }
+    }
+
+    /// Detalle del paso para el panel (diseño o trabajo).
+    fn domain_detail(
+        &self,
+        step_id: &str,
+        validation: &[ValidationIssue],
+    ) -> Option<opm_store::StepDetail> {
+        match self.design() {
+            Some(design) => design.borrow().step_detail(step_id, validation),
+            None => self.store.step_detail(step_id).ok(),
+        }
+    }
+
+    /// Pasos del dominio visible (diseño o trabajo).
+    fn domain_steps(&self) -> Vec<PipelineStep> {
+        match self.design() {
+            Some(design) => design.borrow().steps(),
+            None => self.store.steps(),
+        }
+    }
+
+    /// Refresco del dominio (lienzo, panel, contadores) SIN tocar los
     /// editores (§11 A12: el event pump jamás recarga el editor activo).
     fn refresh_domain(&self) {
-        let snapshot = self.store.snapshot();
+        let snapshot = self.domain_snapshot();
         let selected = self.selected_step.borrow().clone();
         if let Some(canvas) = &self.canvas {
-            canvas.update(CanvasData::new(&snapshot, selected.as_deref()));
+            canvas.update(CanvasData::new(
+                self.canvas_context(),
+                &snapshot,
+                selected.as_deref(),
+            ));
         }
         if let Some(counters) = &self.counters {
             counters.set_issues(&snapshot.validation);
@@ -737,17 +835,20 @@ impl AppCmds {
             // El panel refresca EL PASO QUE MUESTRA (fuente: `current_step`).
             let detail = panel
                 .current_step()
-                .and_then(|id| self.store.step_detail(&id).ok());
+                .and_then(|id| self.domain_detail(&id, &snapshot.validation));
             panel.refresh(detail.as_ref());
         }
+        // Título al día con la suciedad del documento de diseño (●).
+        self.update_title();
     }
 
     /// Selección de paso (lienzo, resumen de validación, importación):
     /// detalle + log del paso en el panel derecho e inferior (paridad SPA
     /// `handleSelectStep`). Un id que ya no existe limpia la selección.
     fn select_step(&self, step: Option<String>) {
+        let snapshot = self.domain_snapshot();
         let detail = match step.as_deref() {
-            Some(id) => self.store.step_detail(id).ok(),
+            Some(id) => self.domain_detail(id, &snapshot.validation),
             None => None,
         };
         let shown = detail.as_ref().map(|detail| detail.step.id.clone());
@@ -763,15 +864,22 @@ impl AppCmds {
             logs.show_step(shown.as_deref(), &content);
         }
         if let Some(canvas) = &self.canvas {
-            let snapshot = self.store.snapshot();
-            canvas.update(CanvasData::new(&snapshot, shown.as_deref()));
+            canvas.update(CanvasData::new(
+                self.canvas_context(),
+                &snapshot,
+                shown.as_deref(),
+            ));
         }
     }
 
     /// Añade `source` a `target.dependencies` (unión, drag nodo→nodo del
-    /// lienzo, A9) y refresca.
+    /// lienzo, A9) y refresca. En diseño la mutación vive en el documento.
     fn add_dependency(&self, target: &str, source: &str) {
-        let Some(step) = self.store.step(target) else {
+        let current = match self.design() {
+            Some(design) => design.borrow().step(target),
+            None => self.store.step(target),
+        };
+        let Some(step) = current else {
             show_error(&self.window, &format!("Unknown step: {target}"));
             return;
         };
@@ -780,7 +888,11 @@ impl AppCmds {
         }
         let mut dependencies = step.dependencies;
         dependencies.push(source.to_owned());
-        if let Err(err) = self.store.set_dependencies(target, dependencies) {
+        let result = match self.design() {
+            Some(design) => design.borrow_mut().set_dependencies(target, dependencies),
+            None => self.store.set_dependencies(target, dependencies),
+        };
+        if let Err(err) = result {
             show_error(&self.window, &err.to_string());
             return;
         }
@@ -789,7 +901,11 @@ impl AppCmds {
 
     /// Elimina `source` de `target.dependencies` (borrado de arista, A9).
     fn remove_dependency(&self, target: &str, source: &str) {
-        let Some(step) = self.store.step(target) else {
+        let current = match self.design() {
+            Some(design) => design.borrow().step(target),
+            None => self.store.step(target),
+        };
+        let Some(step) = current else {
             return;
         };
         let previous = step.dependencies.len();
@@ -801,7 +917,11 @@ impl AppCmds {
         if dependencies.len() == previous {
             return;
         }
-        if let Err(err) = self.store.set_dependencies(target, dependencies) {
+        let result = match self.design() {
+            Some(design) => design.borrow_mut().set_dependencies(target, dependencies),
+            None => self.store.set_dependencies(target, dependencies),
+        };
+        if let Err(err) = result {
             show_error(&self.window, &err.to_string());
             return;
         }
@@ -830,23 +950,25 @@ impl AppCmds {
     }
 
     /// Ejecuta UN paso (botón Run del panel derecho, A10: habilitado en
-    /// reposo).
+    /// reposo). SOLO ventanas de trabajo: el panel de diseño no ofrece Run.
     fn run_step(&self, step_id: String) {
-        if self.running.get() {
+        if !self.scope.is_work() || self.running.get() {
             return;
         }
         self.start_run(self.exec.run_steps(vec![step_id]));
     }
 
-    /// Abre el diálogo crear/editar paso (§6); al enviarlo se persiste con
-    /// `store.create_step` / `store.update_step` (la propagación de rename
-    /// la trae el core).
+    /// Abre el diálogo crear/editar paso (§6); al enviarlo muta el dominio
+    /// (documento de diseño en memoria, o store del trabajo con rename del
+    /// core).
     fn open_step_dialog(&self, draft: StepDraft, steps: Vec<PipelineStep>) {
         let Some(me) = self.slot() else { return };
         let sink = Rc::clone(&me);
         // P2-15: la raíz alimenta las opciones «From output» con los mismos
-        // helpers de rutas que el store.
-        let root = me.store.project_root().ok();
+        // helpers de rutas que el store — en diseño SIN store abierto, el
+        // ancla de la definición es la raíz de la librería (ver
+        // `step_dialog_root`): el productor siempre es ofrecible.
+        let root = step_dialog_root(&me.store, &me.scope);
         pipeline::step_dialog::open_step_dialog(
             &self.window,
             draft,
@@ -857,11 +979,17 @@ impl AppCmds {
     }
 
     /// Persiste el paso armado por el diálogo (crear o edición) y lo
-    /// selecciona (el usuario ve el resultado de inmediato).
+    /// selecciona (el usuario ve el resultado de inmediato). En diseño la
+    /// mutación vive en el documento en memoria (sucio hasta Save).
     fn submit_step(&self, original_id: Option<String>, step: PipelineStep) {
-        let result = match &original_id {
-            Some(old_id) => self.store.update_step(old_id, step.clone()),
-            None => self.store.create_step(step.clone()),
+        let result = match self.design() {
+            Some(design) => design
+                .borrow_mut()
+                .submit(original_id.as_deref(), step.clone()),
+            None => match &original_id {
+                Some(old_id) => self.store.update_step(old_id, step.clone()),
+                None => self.store.create_step(step.clone()),
+            },
         };
         match result {
             Ok(()) => {
@@ -873,23 +1001,14 @@ impl AppCmds {
         }
     }
 
-    /// Sensibilidad de acciones y botones según la ejecución (A10: las
-    /// acciones de run están habilitadas en reposo y deshabilitadas SOLO
-    /// mientras corre; A12: cambio de proyecto y mutaciones estructurales
-    /// deshabilitados mientras corre).
+    /// Sensibilidad de acciones y botones según el TIPO DE VENTANA y la
+    /// ejecución (acoplamiento oculto #2: las acciones de librería/trabajo
+    /// se deshabilitan visiblemente, nunca fallan al despachar; A10: run
+    /// habilitado en reposo; A12: cambio de dominio y mutaciones
+    /// estructurales deshabilitados mientras corre).
     fn apply_running_ui(&self) {
         let running = self.running.get();
-        for action in [
-            "new-project",
-            "open-project",
-            "open-folder",
-            "import-pipeline",
-            "create-step",
-            "run-selected",
-        ] {
-            self.set_action_enabled(action, !running);
-        }
-        self.set_action_enabled("stop", running);
+        self.apply_command_gate();
         if let Some(panel) = &self.step_panel {
             panel.set_running(running);
         }
@@ -903,6 +1022,247 @@ impl AppCmds {
         if let Some(logs) = &self.logs {
             logs.stop_button().set_sensitive(running);
         }
+    }
+
+    /// Habilita/deshabilita los comandos cuya sensibilidad depende del
+    /// ámbito/ejecución (matriz pura en [`menus::actions::enabled_for`]).
+    fn apply_command_gate(&self) {
+        let running = self.running.get();
+        for command in menus::actions::GATED_COMMANDS {
+            let name = command
+                .action_id()
+                .strip_prefix("win.")
+                .expect("los action_id usan el prefijo «win.» (§36)");
+            self.set_action_enabled(name, menus::actions::enabled_for(*command, &self.scope, running));
+        }
+    }
+
+    // --- Flujos de diseño (librería `.pipeline`, sin carpeta) ---------------
+
+    /// Sustituye el documento de diseño de ESTA ventana (requiere scope
+    /// Design) y refresca todas las vistas.
+    fn set_design(&self, doc: PipelineDoc, saved_name: Option<String>) {
+        let Some(design) = self.design() else {
+            return;
+        };
+        *design.borrow_mut() = DesignState::from_doc(doc, saved_name);
+        *self.selected_step.borrow_mut() = None;
+        self.select_step(None);
+        self.refresh_design_label();
+        self.show_view(CenterView::Pipeline);
+        self.refresh_domain();
+        self.update_title();
+    }
+
+    /// Etiqueta del toolbar de diseño: `<nombre>.pipeline · <raíz librería>`
+    /// — la ubicación de la librería queda visible en la UI (decisión #2).
+    fn refresh_design_label(&self) {
+        let Some(label) = &self.design_label else {
+            return;
+        };
+        label.set_text(&format!(
+            "{}.pipeline · {}",
+            self.design_display_name(),
+            project::library_root().display()
+        ));
+    }
+
+    /// Confirmación de descarte (§3.7) antes de sustituir un documento de
+    /// diseño con cambios sin guardar. `true` = continuar.
+    async fn confirm_replace_design(&self) -> bool {
+        if let Some(design) = self.design() {
+            let (dirty, name) = {
+                let design = design.borrow();
+                (design.dirty(), design.display_name().to_owned())
+            };
+            if dirty {
+                let title = if name.is_empty() {
+                    "the unsaved pipeline".to_owned()
+                } else {
+                    format!("{name}.pipeline")
+                };
+                return dialogs::confirm_discard(&self.window, &title).await;
+            }
+        }
+        true
+    }
+
+    /// Aplica `doc` a ESTA ventana si es de diseño; si no, abre una ventana
+    /// de diseño nueva con él (los flujos de librería son spawnables desde
+    /// standalone/folder; el gate ya los deshabilita en ventanas de trabajo).
+    fn present_design(&self, app: &Application, doc: PipelineDoc, saved_name: Option<String>) {
+        if self.scope.is_design() {
+            self.set_design(doc, saved_name);
+        } else {
+            let window = build_window(app, WindowScope::Design, &[]);
+            window.set_design(doc, saved_name);
+        }
+    }
+
+    /// Save (sin prompt) / Save As (prompt siempre) del documento de diseño.
+    fn save_pipeline_doc(&self, force_prompt: bool) {
+        let Some(me) = self.slot() else { return };
+        if !me.scope.is_design() {
+            return;
+        }
+        if !force_prompt {
+            // Ya guardado antes: Save re-SU archivo de la librería (el
+            // conflicto de nombre solo existe en el primer guardado/Save As).
+            let saved = me
+                .design()
+                .and_then(|cell| cell.borrow().saved_name().map(str::to_owned));
+            if let Some(stem) = saved {
+                me.write_library(&stem, None);
+                return;
+            }
+        }
+        me.prompt_save_name();
+    }
+
+    /// Prompt de nombre de librería (prefill: nombre actual del documento).
+    fn prompt_save_name(&self) {
+        let Some(me) = self.slot() else { return };
+        let initial = me.design_display_name();
+        let window = me.window.clone();
+        dialogs::prompt_text(&window, "Save pipeline", &initial, Rc::new(move |answer| {
+            let Some(text) = answer.filter(|text| !text.trim().is_empty()) else {
+                return;
+            };
+            me.save_pipeline_named(&text);
+        }));
+    }
+
+    /// Guarda bajo `name`: `CreateNew` en la librería; un nombre ocupado
+    /// exige elección explícita (Sobrescribir / Guardar como / Cancelar).
+    fn save_pipeline_named(&self, name: &str) {
+        let Some(me) = self.slot() else { return };
+        let stem = match pipeline::design::library_stem(name) {
+            Ok(stem) => stem,
+            Err(err) => {
+                show_error(&me.window, &err.to_string());
+                return;
+            }
+        };
+        let Some(design) = me.design() else { return };
+        let doc = design.borrow().document_for_save(&stem);
+        let window = me.window.clone();
+        glib::spawn_future_local(async move {
+            let library = project::library();
+            match pipeline::design::save_new(&library, &stem, &doc) {
+                Ok(pipeline::design::SaveOutcome::Saved) => me.mark_design_saved(&stem),
+                Ok(pipeline::design::SaveOutcome::NameExists) => {
+                    match dialogs::confirm_name_conflict(&window, &stem).await {
+                        dialogs::NameConflict::Overwrite => {
+                            me.write_library(&stem, Some(&doc));
+                        }
+                        dialogs::NameConflict::SaveAs => me.prompt_save_name(),
+                        dialogs::NameConflict::Cancel => {}
+                    }
+                }
+                Err(err) => show_error(&window, &err.to_string()),
+            }
+        });
+    }
+
+    /// Escribe `doc` (o el documento actual) en la librería con `Overwrite`.
+    fn write_library(&self, stem: &str, doc: Option<&PipelineDoc>) {
+        let owned;
+        let doc = match doc {
+            Some(doc) => doc,
+            None => {
+                let Some(design) = self.design() else { return };
+                owned = design.borrow().document_for_save(stem);
+                &owned
+            }
+        };
+        match project::library().save(stem, doc, SaveMode::Overwrite) {
+            Ok(()) => self.mark_design_saved(stem),
+            Err(err) => show_error(&self.window, &err.to_string()),
+        }
+    }
+
+    /// Tras guardar: documento limpio con su nombre + label/título frescos.
+    fn mark_design_saved(&self, stem: &str) {
+        if let Some(design) = self.design() {
+            design.borrow_mut().mark_saved(stem);
+        }
+        self.refresh_design_label();
+        self.update_title();
+    }
+
+    /// Importa `file` a la librería con el nombre de librería `name`
+    /// (reentrable: «Save as» del conflicto vuelve a aquí con otro nombre).
+    fn import_pipeline_as(&self, file: PathBuf, name: String) {
+        let Some(me) = self.slot() else { return };
+        let stem = match pipeline::design::library_stem(&name) {
+            Ok(stem) => stem,
+            Err(err) => {
+                show_error(&me.window, &err.to_string());
+                return;
+            }
+        };
+        let window = me.window.clone();
+        glib::spawn_future_local(async move {
+            let library = project::library();
+            match library.import_file(&file, &stem) {
+                Ok(doc) => me.show_imported(doc, stem),
+                Err(StoreError::NameExists(_)) => {
+                    match dialogs::confirm_name_conflict(&window, &stem).await {
+                        dialogs::NameConflict::Overwrite => {
+                            let doc =
+                                match pipeline::design::definition_from_file(&file, &stem) {
+                                    Ok(doc) => doc,
+                                    Err(err) => {
+                                        show_error(&window, &err.to_string());
+                                        return;
+                                    }
+                                };
+                            match library.save(&stem, &doc, SaveMode::Overwrite) {
+                                Ok(()) => me.show_imported(doc, stem),
+                                Err(err) => show_error(&window, &err.to_string()),
+                            }
+                        }
+                        dialogs::NameConflict::SaveAs => me.prompt_import_name(file),
+                        dialogs::NameConflict::Cancel => {}
+                    }
+                }
+                Err(err) => show_error(&window, &err.to_string()),
+            }
+        });
+    }
+
+    /// Prompt de nombre para importar con otro nombre (conflicto → Save as).
+    fn prompt_import_name(&self, file: PathBuf) {
+        let Some(me) = self.slot() else { return };
+        let initial = file
+            .file_stem()
+            .map(|stem| stem.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "pipeline".to_owned());
+        let window = me.window.clone();
+        dialogs::prompt_text(
+            &window,
+            "Import pipeline as",
+            &initial,
+            Rc::new(move |answer| {
+                let Some(name) = answer.filter(|name| !name.trim().is_empty()) else {
+                    return;
+                };
+                me.import_pipeline_as(file.clone(), name);
+            }),
+        );
+    }
+
+    /// Abre el documento recién importado en una ventana de diseño (con
+    /// confirmación de descarte si ESTA ventana tiene un diseño sucio).
+    fn show_imported(&self, doc: PipelineDoc, stem: String) {
+        let Some(me) = self.slot() else { return };
+        let app = me.app.clone();
+        glib::spawn_future_local(async move {
+            if !me.confirm_replace_design().await {
+                return;
+            }
+            me.present_design(&app, doc, Some(stem));
+        });
     }
 
     /// Tick del event pump (§11 A12): drenado NO bloqueante con lote
@@ -1152,9 +1512,11 @@ impl Commands for AppCmds {
             let Some(folder) = dialogs::open_folder(&window).await else {
                 return;
             };
-            // ISSUE-021: cada carpeta se abre en su propia ventana con su
-            // explorador.
-            build_window(&app, WindowScope::Project(folder), &[]);
+            // ISSUE-021/pipeline-storage: cada carpeta se abre en su propia
+            // ventana — con `run.json` es ventana de trabajo, sin él es solo
+            // explorador (que NO escribe nada dentro).
+            let scope = project::scope_for_folder(folder);
+            build_window(&app, scope, &[]);
         });
     }
 
@@ -1294,8 +1656,8 @@ impl Commands for AppCmds {
     }
 
     fn toggle_explorer(&self) {
-        // §14.3: el explorador solo existe en ventanas de proyecto; en
-        // standalone Ctrl+B es un no-op documentado.
+        // §14.3: el explorador solo existe en ventanas con carpeta; en
+        // standalone/diseño Ctrl+B es un no-op documentado.
         let (Some(paned), Some(_)) = (&self.explorer_paned, &self.explorer) else {
             return;
         };
@@ -1317,45 +1679,64 @@ impl Commands for AppCmds {
         self.persist_explorer_state();
     }
 
-    /// Refresh (P2-13, Project ▸ Refresh y botón del explorador): marca con
-    /// ⚠ los ficheros abiertos que cambiaron en disco (huella del LocalFs,
-    /// §12.7 — sin recargar ningún buffer) y relee el árbol (los outputs
-    /// generados aparecen sin reiniciar).
-    fn refresh(&self) {
-        self.tabs.borrow_mut().mark_external_changes();
-        self.refresh_explorer();
+    /// Diseño: documento NUEVO — pide nombre y lo abre en una ventana de
+    /// diseño (sin carpeta de trabajo; nada se toca en disco hasta Save).
+    fn new_pipeline(&self) {
+        let Some(me) = self.slot() else { return };
+        let app = me.app.clone();
+        let window = me.window.clone();
+        dialogs::prompt_text(
+            &window,
+            "New pipeline",
+            "my-pipeline",
+            Rc::new(move |answer| {
+                let Some(name) = answer else { return };
+                let app = app.clone();
+                let me = Rc::clone(&me);
+                glib::spawn_future_local(async move {
+                    if !me.confirm_replace_design().await {
+                        return;
+                    }
+                    let doc = PipelineDoc::new(name.trim(), PipelineConfig::default());
+                    me.present_design(&app, doc, None);
+                });
+            }),
+        );
     }
 
-    /// Crea un proyecto (§6, Project ▸ New project) y abre SU ventana con
-    /// el scaffold ya en disco.
-    fn new_project(&self) {
-        let app = self.app.clone();
-        let window = self.window.clone();
-        project::create_dialog(&window, Rc::new(move |root| {
-            build_window(&app, WindowScope::Project(root), &[]);
+    /// Diseño: navegador de la librería (con la raíz visible) → documento en
+    /// ESTA ventana de diseño, o en una nueva si esta no lo es.
+    fn open_pipeline(&self) {
+        let Some(me) = self.slot() else { return };
+        let app = me.app.clone();
+        let window = me.window.clone();
+        let dialog_window = window.clone();
+        project::pick_library(&dialog_window, Rc::new(move |picked| {
+            let Some(name) = picked else { return };
+            match project::library().load(&name) {
+                Ok(doc) => {
+                    let app = app.clone();
+                    let me = Rc::clone(&me);
+                    glib::spawn_future_local(async move {
+                        if !me.confirm_replace_design().await {
+                            return;
+                        }
+                        me.present_design(&app, doc, Some(name));
+                    });
+                }
+                Err(err) => show_error(&window, &err.to_string()),
+            }
         }));
     }
 
-    /// Abre un proyecto existente (§6): la carpeta se valida contra
-    /// `project.config.json` y un falto claro nunca abre una ventana
-    /// degradada.
-    fn open_project(&self) {
-        let app = self.app.clone();
-        let window = self.window.clone();
-        glib::spawn_future_local(async move {
-            let Some(folder) = project::pick_project(&window).await else {
-                return;
-            };
-            build_window(&app, WindowScope::Project(folder), &[]);
-        });
-    }
-
-    /// Importa un `.yml`/`.yaml`/`.json` al proyecto abierto (§6). La
-    /// selección de paso se conserva si el paso sigue existiendo (paridad
-    /// SPA `refresh`).
+    /// Diseño: importa un `.yml`/`.yaml`/`.json` a la librería
+    /// (`import_file`, CreateNew — nunca sobrescritura silenciosa) y abre
+    /// el documento importado.
     fn import_pipeline(&self) {
         let Some(me) = self.slot() else { return };
-        if me.running.get() || !me.require_project() {
+        // El gate deshabilita Import en ventanas de trabajo; aquí solo la
+        // defensa en despachos que no vengan del menú.
+        if me.running.get() || me.scope.is_work() {
             return;
         }
         let window = me.window.clone();
@@ -1363,62 +1744,198 @@ impl Commands for AppCmds {
             let Some(file) = dialogs::open_pipeline(&window).await else {
                 return;
             };
-            match me.store.import_pipeline(&file) {
-                Ok(_) => {
+            let hint = file
+                .file_stem()
+                .map(|stem| stem.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "pipeline".to_owned());
+            me.import_pipeline_as(file, hint);
+        });
+    }
+
+    /// Diseño: exporta el documento abierto a YAML/JSON para compartirlo
+    /// (formato por la extensión del destino; la librería no se toca).
+    fn export_pipeline(&self) {
+        let Some(me) = self.slot() else { return };
+        if !me.scope.is_design() {
+            return;
+        }
+        let (steps_empty, suggested) = {
+            let Some(design) = me.design() else { return };
+            let design = design.borrow();
+            let name = design.display_name().to_owned();
+            let name = if name.is_empty() { "pipeline".to_owned() } else { name };
+            (
+                design.doc().pipeline.steps.is_empty(),
+                format!("{name}.json"),
+            )
+        };
+        if steps_empty {
+            show_error(&me.window, "The pipeline has no steps to export");
+            return;
+        }
+        let window = me.window.clone();
+        glib::spawn_future_local(async move {
+            let Some(dest) = dialogs::save_pipeline(&window, &suggested).await else {
+                return;
+            };
+            let format = match dest.extension().and_then(|ext| ext.to_str()) {
+                Some("yml") | Some("yaml") => ExportFormat::Yaml,
+                _ => ExportFormat::Json,
+            };
+            let Some(design) = me.design() else { return };
+            let doc = design.borrow().doc().clone();
+            if let Err(err) = project::library().export(&doc, &dest, format) {
+                show_error(&window, &err.to_string());
+            }
+        });
+    }
+
+    /// Diseño: guarda en la librería (prompt en el primer guardado;
+    /// elección explícita ante un nombre ocupado).
+    fn save_pipeline(&self) {
+        self.save_pipeline_doc(false);
+    }
+
+    /// Diseño: guarda bajo OTRO nombre (duplica deliberadamente).
+    fn save_pipeline_as(&self) {
+        self.save_pipeline_doc(true);
+    }
+
+    /// Trabajo: pipeline de la librería + carpeta (creada o elegida) →
+    /// `create_work` y ventana de trabajo nueva.
+    fn new_work(&self) {
+        let Some(me) = self.slot() else { return };
+        if me.running.get() {
+            return;
+        }
+        let app = me.app.clone();
+        let window = me.window.clone();
+        let dialog_window = window.clone();
+        project::pick_library(&dialog_window, Rc::new(move |picked| {
+            let Some(name) = picked else { return };
+            let doc = match project::library().load(&name) {
+                Ok(doc) => doc,
+                Err(err) => {
+                    show_error(&window, &err.to_string());
+                    return;
+                }
+            };
+            let app = app.clone();
+            let window = window.clone();
+            glib::spawn_future_local(async move {
+                let Some(folder) = dialogs::open_folder(&window).await else {
+                    return;
+                };
+                // `create_work` sobre un store NUEVO: la ventana actual (si
+                // es un trabajo en curso) no se toca.
+                let store = ProjectStore::new();
+                if let Err(err) = store.create_work(&folder, &doc) {
+                    show_error(&window, &err.to_string());
+                    return;
+                }
+                build_window(&app, WindowScope::Work(folder), &[]);
+            });
+        }));
+    }
+
+    /// Trabajo: carpeta con `.pipeline-manager/run.json` → `open_work`
+    /// (sin `run.json` hay error claro y no se abre nada).
+    fn open_work(&self) {
+        let Some(_me) = self.slot() else { return };
+        let window = self.window.clone();
+        let app = self.app.clone();
+        glib::spawn_future_local(async move {
+            let Some(folder) = project::pick_work(&window).await else {
+                return;
+            };
+            build_window(&app, WindowScope::Work(folder), &[]);
+        });
+    }
+
+    /// Trabajo: adopta el documento de la librería nombrado por el `source`
+    /// del `run.json` (fallback: selector de fichero) con
+    /// `adopt_definition` y muestra el `AdoptReport` en un diálogo.
+    fn update_from_library(&self) {
+        let Some(me) = self.slot() else { return };
+        if !me.scope.is_work() || me.running.get() {
+            return;
+        }
+        let window = me.window.clone();
+        glib::spawn_future_local(async move {
+            let Some(root) = me.store.project_root().ok() else {
+                return;
+            };
+            let mut resolved: Option<(PipelineDoc, String)> = None;
+            if let Some(name) = project::work_source_name(&root).filter(|name| !name.is_empty())
+            {
+                if let Ok(doc) = project::library().load(&name) {
+                    resolved = Some((doc, name));
+                }
+            }
+            let resolved = match resolved {
+                Some(resolved) => resolved,
+                None => {
+                    // El documento de la librería ya no está (movido,
+                    // renombrado o borrado): el usuario elige el fichero.
+                    let Some(file) = dialogs::open_definition(&window).await else {
+                        return;
+                    };
+                    let hint = file
+                        .file_stem()
+                        .map(|stem| stem.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| "pipeline".to_owned());
+                    let stem =
+                        pipeline::design::library_stem(&hint).unwrap_or_else(|_| hint.clone());
+                    match pipeline::design::definition_from_file(&file, &stem) {
+                        Ok(doc) => (doc, stem),
+                        Err(err) => {
+                            show_error(&window, &err.to_string());
+                            return;
+                        }
+                    }
+                }
+            };
+            match me.store.adopt_definition(&resolved.0) {
+                Ok(report) => {
                     let keep = me.selected_step.borrow().clone();
                     me.refresh_domain();
                     me.select_step(keep);
-                    me.refresh_explorer();
+                    dialogs::info_message(
+                        &window,
+                        "Update from library",
+                        &format_adopt_report(&resolved.1, &report),
+                    )
+                    .await;
                 }
                 Err(err) => show_error(&window, &err.to_string()),
             }
         });
     }
 
-    /// Exporta el pipeline del proyecto a JSON (§6, Project ▸ Export
-    /// pipeline): lectura, así sigue habilitado mientras corre.
-    fn export_pipeline(&self) {
-        let Some(me) = self.slot() else { return };
-        if !me.require_project() {
-            return;
-        }
-        let window = me.window.clone();
-        glib::spawn_future_local(async move {
-            let Some(dest) = dialogs::save_pipeline(&window, "pipeline.json").await else {
-                return;
-            };
-            if let Err(err) = me.store.export_pipeline(&dest) {
-                show_error(&window, &err.to_string());
-            }
-        });
-    }
-
     /// Diálogo de creación de paso (§6, Pipeline ▸ Create step): id auto
-    /// `step_<n+1>` y, al guardar, `store.create_step` / `update_step`.
+    /// `step_<n+1>`; SOLO ventanas de diseño (la edición estructural vive
+    /// en el documento en memoria).
     fn create_step(&self) {
         let Some(me) = self.slot() else { return };
-        if me.running.get() || !me.require_project() {
+        if !me.scope.is_design() || me.running.get() {
             return;
         }
-        let steps = me.store.steps();
+        let steps = me.domain_steps();
         let draft = StepDraft::for_create(&steps);
         me.open_step_dialog(draft, steps);
     }
 
     /// Ejecuta los pasos seleccionados — o los no `ok` si no hay selección
     /// (§4 opm-exec; A10: habilitado en reposo, el preflight del motor es
-    /// autoridad sobre los blockers).
+    /// autoridad sobre los blockers). SOLO ventanas de trabajo.
     fn run_selected(&self) {
-        if self.running.get() {
-            return;
-        }
-        if !self.require_project() {
+        if !self.scope.is_work() || self.running.get() {
             return;
         }
         if self.store.steps().is_empty() {
             show_error(
                 &self.window,
-                "No pipeline imported — use Project ▸ Import pipeline",
+                "This work folder has no pipeline steps",
             );
             return;
         }
@@ -1564,6 +2081,42 @@ fn save_confirmed_and_reload(
 fn active_is_markdown(tabs: &RefCell<TabManager>) -> bool {
     let tabs = tabs.borrow();
     path_is_markdown(tabs.active().path.as_deref())
+}
+
+/// Raíz que alimenta las opciones «From output» del diálogo de paso
+/// (P2-15): en ventanas de TRABAJO, la carpeta abierta (los mismos helpers
+/// con los que el store persiste el enlace). En ventanas de DISEÑO el store
+/// está sin abrir a propósito — el ancla es la raíz de la librería, raíz
+/// común de la definición: la aritmética es LA MISMA (`resolve_pipeline_path`
+/// + `relative_project_path`) y la raíz común se cancela en la relativa, así
+/// que el preview del picker es exactamente la cadena que guardará la
+/// carpeta de trabajo con esa estructura. Sin carpeta de trabajo y sin
+/// dependencia del cwd de lanzamiento (`library_root`, decisión #2).
+/// `None` solo en ventanas sin dominio de pipeline (allí no hay diálogo).
+fn step_dialog_root(store: &ProjectStore, scope: &WindowScope) -> Option<PathBuf> {
+    store
+        .project_root()
+        .ok()
+        .or_else(|| scope.is_design().then(project::library_root))
+}
+
+/// Informe legible de un [`AdoptReport`] («Update from library»): la
+/// adopción de la librería es una acción explícita y observable (§3.7).
+fn format_adopt_report(name: &str, report: &AdoptReport) -> String {
+    fn group(label: &str, steps: &[String]) -> String {
+        if steps.is_empty() {
+            format!("{label}: —")
+        } else {
+            format!("{label} ({}): {}", steps.len(), steps.join(", "))
+        }
+    }
+    format!(
+        "Adopted {name}.pipeline into this work folder.\n\n{}\n{}\n{}\n{}",
+        group("Changed (state reset to pending)", &report.changed),
+        group("Removed", &report.removed),
+        group("Added", &report.added),
+        group("Unchanged", &report.unchanged),
+    )
 }
 
 fn path_is_markdown(path: Option<&Path>) -> bool {
@@ -1722,6 +2275,19 @@ fn schedule_reap(
 /// Cierre normal de la ventana: confirmación de descartes si hay cambios
 /// sin guardar (§3.7), desconexión de las acciones y destrucción.
 async fn close_after_checks(window: ApplicationWindow, slot: Rc<CmdSlot>) {
+    // Documento de diseño con cambios sin guardar (§3.7): confirmación
+    // explícita ANTES de la de los pestañas de texto.
+    let design_dirty = slot
+        .borrow()
+        .as_ref()
+        .and_then(Weak::upgrade)
+        .map(|me| (me.design_dirty(), me.design_display_name()))
+        .filter(|(dirty, _)| *dirty);
+    if let Some((_, name)) = design_dirty {
+        if !dialogs::confirm_discard(&window, &format!("{name}.pipeline")).await {
+            return;
+        }
+    }
     let any_modified = slot
         .borrow()
         .as_ref()
@@ -1775,36 +2341,41 @@ fn build_window(app: &Application, scope: WindowScope, open_paths: &[PathBuf]) -
 
     // Canoniza la raíz del árbol una vez: las filas del explorador cuelgan
     // de ella y las ops de `opm-fs` reciben rutas relativas a esta raíz.
-    let scope = match scope {
-        WindowScope::Project(root) => {
-            WindowScope::Project(opm_fs::canonicalize(&root).unwrap_or(root))
+    let mut scope = match scope {
+        WindowScope::Folder(root) => {
+            WindowScope::Folder(opm_fs::canonicalize(&root).unwrap_or(root))
         }
-        WindowScope::Standalone => WindowScope::Standalone,
+        WindowScope::Work(root) => WindowScope::Work(opm_fs::canonicalize(&root).unwrap_or(root)),
+        other => other,
     };
     // Store + motor de ESTA ventana (§4 opm-store/opm-exec, A6: el store es
-    // `Arc` porque el motor cruza hilos). En ventanas de proyecto se intenta
-    // abrir; una carpeta que no es proyecto sigue siendo ventana con
-    // explorador y el lienzo explica el motivo (§6, mensaje claro).
+    // `Arc` porque el motor cruza hilos). En ventanas de trabajo se abre el
+    // `run.json`; si falla (corrupto/race) hay error visible y la ventana
+    // degrada a SOLO explorador — nunca un dominio a medias.
     let store = Arc::new(ProjectStore::new());
     let exec = Rc::new(ExecutionManager::new(Arc::clone(&store)));
-    let is_project = matches!(scope, WindowScope::Project(_));
-    if let WindowScope::Project(root) = &scope {
-        if let Err(err) = store.open_project(root) {
-            eprintln!("opm: no se pudo abrir el proyecto {}: {err}", root.display());
+    if let WindowScope::Work(root) = &scope {
+        if let Err(err) = store.open_work(root) {
+            show_error(
+                &window,
+                &format!("Could not open the work folder:\n{err}"),
+            );
+            scope = WindowScope::Folder(root.clone());
         }
     }
-    // §11 A13: el hueco de sesión registra el último proyecto abierto con su
-    // timestamp; `project::restore` lo restaura al arrancar con TTL de 1 h
+    // §11 A13: el hueco de sesión registra la última carpeta de TRABAJO con
+    // su timestamp; `project::restore` la restaura al arrancar con TTL de 1 h
     // y lo limpia si está caducado o inválido (§6).
-    if let WindowScope::Project(root) = &scope {
-        if store.project_root().is_ok() {
-            if let Err(err) =
-                appstate::save_last_project(&Some((root.display().to_string(), project::now_secs())))
-            {
-                eprintln!("opm: no se pudo guardar el último proyecto: {err}");
-            }
+    if let WindowScope::Work(root) = &scope {
+        if let Err(err) =
+            appstate::save_last_work(&Some((root.display().to_string(), project::now_secs())))
+        {
+            eprintln!("opm: no se pudo guardar la última carpeta de trabajo: {err}");
         }
     }
+    let is_design = scope.is_design();
+    let is_work = scope.is_work();
+    let has_pipeline = scope.has_pipeline_surface();
     let slot: Rc<CmdSlot> = Rc::new(RefCell::new(None));
     let tabs = Rc::new(RefCell::new(TabManager::new()));
     tabs.borrow_mut().set_scope(scope.clone());
@@ -1842,9 +2413,9 @@ fn build_window(app: &Application, scope: WindowScope, open_paths: &[PathBuf]) -
             }
         })
     }));
-    // A11: en ventanas de proyecto la franja es permanente (el editor sigue
-    // alcanzable junto a la pestaña «Pipeline» con un solo documento).
-    tab_bar.set_persistent(matches!(scope, WindowScope::Project(_)));
+    // A11: en ventanas con superficie de pipeline la franja es permanente
+    // (el editor sigue alcanzable junto a la pestaña «Pipeline»).
+    tab_bar.set_persistent(has_pipeline);
     let tab_bar_widget = tab_bar.widget();
 
     // Barra de búsqueda/reemplazo del archivo actual (§40.1): acciones en
@@ -1858,11 +2429,11 @@ fn build_window(app: &Application, scope: WindowScope, open_paths: &[PathBuf]) -
         })
     }));
 
-    // Explorador (§14.3): solo en ventanas de proyecto, con el estado
-    // restaurado desde `appstate` (§11 A13).
+    // Explorador (§14.3): solo en ventanas CON CARPETA (trabajo o folder),
+    // con el estado restaurado desde `appstate` (§11 A13).
     let explorer_state = load_state();
     let explorer = match &scope {
-        WindowScope::Project(root) => {
+        WindowScope::Folder(root) | WindowScope::Work(root) => {
             let on_open: Rc<dyn Fn(PathBuf)> = {
                 let slot = slot.clone();
                 Rc::new(move |path: PathBuf| {
@@ -1879,7 +2450,7 @@ fn build_window(app: &Application, scope: WindowScope, open_paths: &[PathBuf]) -
                     }
                 })
             };
-            // Arrastres del explorador (P2-12): mover dentro del proyecto o
+            // Arrastres del explorador (P2-12): mover dentro de la carpeta o
             // importar ficheros del SO, con la confirmación y la
             // re-objetivación en el coordinador.
             let on_drop: Rc<dyn Fn(ExplorerDrop, PathBuf)> = {
@@ -1890,8 +2461,8 @@ fn build_window(app: &Application, scope: WindowScope, open_paths: &[PathBuf]) -
                     }
                 })
             };
-            // Botón Refresh de la cabecera (P2-13): el MISMO flujo que
-            // Project ▸ Refresh (banderín ⚠ + relectura del árbol).
+            // Botón Refresh de la cabecera (P2-13): banderín ⚠ de cambios
+            // externos + relectura del árbol (mismo flujo que `refresh`).
             let on_refresh: Rc<dyn Fn()> = {
                 let slot = slot.clone();
                 Rc::new(move || {
@@ -1904,7 +2475,7 @@ fn build_window(app: &Application, scope: WindowScope, open_paths: &[PathBuf]) -
                 root, on_open, on_action, on_drop, on_refresh,
             )))
         }
-        WindowScope::Standalone => None,
+        _ => None,
     };
 
     // Layout §6: menú (popover) + toolbar + `explorador | centro | panel de
@@ -1913,11 +2484,11 @@ fn build_window(app: &Application, scope: WindowScope, open_paths: &[PathBuf]) -
     let menubar = PopoverMenuBar::from_model(Some(&build_menubar()));
     menubar.set_hexpand(true);
 
-    // Franja de pestañas del centro: «Pipeline» (solo proyecto) + pestañas
+    // Franja de pestañas del centro: «Pipeline» (diseño/trabajo) + pestañas
     // de texto (TabBar) + pestañas de imagen con su ✕ (A11).
     let strip = GtkBox::new(Orientation::Horizontal, 0);
     strip.add_css_class("opm-tab-bar");
-    let pipeline_btn = is_project.then(|| {
+    let pipeline_btn = has_pipeline.then(|| {
         let button = gtk4::Button::with_label("Pipeline");
         let slot = slot.clone();
         button.connect_clicked(move |_| {
@@ -1935,13 +2506,13 @@ fn build_window(app: &Application, scope: WindowScope, open_paths: &[PathBuf]) -
     strip.append(&image_strip);
 
     // Stack central permanente (§11 A11): editor SIEMPRE presente; la
-    // página «Pipeline» y el panel de paso solo existen en ventanas de
-    // proyecto.
+    // página «Pipeline» y el panel de paso solo existen en ventanas con
+    // superficie de pipeline (diseño/trabajo).
     let stack = Stack::new();
     stack.set_hexpand(true);
     stack.add_named(&editor_pane.widget(), Some("editor"));
 
-    let canvas = if is_project {
+    let canvas = if has_pipeline {
         let callbacks = CanvasCallbacks {
             on_select: {
                 let slot = slot.clone();
@@ -1955,7 +2526,11 @@ fn build_window(app: &Application, scope: WindowScope, open_paths: &[PathBuf]) -
                 let slot = slot.clone();
                 Rc::new(move |step_id| {
                     if let Some(me) = slot.borrow().as_ref().and_then(Weak::upgrade) {
-                        if let Err(err) = me.store.toggle_selected(&step_id) {
+                        // Diseño: selección de run en memoria (NO ensucia el
+                        // documento); trabajo: persiste en `run.json`.
+                        if let Some(design) = me.design() {
+                            design.borrow_mut().toggle_selected(&step_id);
+                        } else if let Err(err) = me.store.toggle_selected(&step_id) {
                             show_error(&me.window, &err.to_string());
                         }
                         me.refresh_domain();
@@ -1994,10 +2569,19 @@ fn build_window(app: &Application, scope: WindowScope, open_paths: &[PathBuf]) -
                 let slot = slot.clone();
                 Rc::new(move |step_id, x, y| {
                     if let Some(me) = slot.borrow().as_ref().and_then(Weak::upgrade) {
-                        // Persiste SOLO el nodo movido (set_layout fusiona).
-                        let positions = HashMap::from([(step_id, (x, y))]);
-                        if let Err(err) = me.store.set_layout(positions) {
-                            show_error(&me.window, &err.to_string());
+                        // Diseño: SOLO el nodo movido en el layout del
+                        // documento (sucio hasta Save). El lienzo de trabajo
+                        // no mueve nodos (`edits_enabled` false).
+                        if let Some(design) = me.design() {
+                            design.borrow_mut().set_layout(&step_id, x, y);
+                            // El layout es parte del documento: el ● de
+                            // cambios sin guardar aparece de inmediato.
+                            me.update_title();
+                        } else {
+                            let positions = HashMap::from([(step_id, (x, y))]);
+                            if let Err(err) = me.store.set_layout(positions) {
+                                show_error(&me.window, &err.to_string());
+                            }
                         }
                     }
                 })
@@ -2005,10 +2589,13 @@ fn build_window(app: &Application, scope: WindowScope, open_paths: &[PathBuf]) -
             edits_enabled: {
                 let slot = slot.clone();
                 Rc::new(move || {
+                    // Ediciones estructurales SOLO en ventanas de diseño y
+                    // nunca en ejecución (§11 A12); en trabajo el lienzo es
+                    // de solo lectura (selección + checkbox).
                     slot.borrow()
                         .as_ref()
                         .and_then(Weak::upgrade)
-                        .map(|me| !me.running.get())
+                        .map(|me| me.scope.is_design() && !me.running.get())
                         .unwrap_or(false)
                 })
             },
@@ -2020,14 +2607,16 @@ fn build_window(app: &Application, scope: WindowScope, open_paths: &[PathBuf]) -
         None
     };
 
-    // Panel derecho de detalle (§6): editar/ejecutar paso + valores.
-    let step_panel = is_project.then(|| {
-        StepPanel::new(StepCallbacks {
+    // Panel derecho de detalle (§6): en DISEÑO edita pasos (Edit) con los
+    // valores como solo lectura; en TRABAJO muestra valores editables
+    // (set_params → run.json) y Run, sin edición estructural.
+    let step_panel = if has_pipeline {
+        let panel = StepPanel::new(StepCallbacks {
             on_edit: {
                 let slot = slot.clone();
                 Rc::new(move |step| {
                     if let Some(me) = slot.borrow().as_ref().and_then(Weak::upgrade) {
-                        let steps = me.store.steps();
+                        let steps = me.domain_steps();
                         me.open_step_dialog(StepDraft::for_edit(&step), steps);
                     }
                 })
@@ -2044,6 +2633,11 @@ fn build_window(app: &Application, scope: WindowScope, open_paths: &[PathBuf]) -
                 let slot = slot.clone();
                 Rc::new(move |step_id, key, value: Value| {
                     if let Some(me) = slot.borrow().as_ref().and_then(Weak::upgrade) {
+                        // En diseño los editores están deshabilitados: los
+                        // valores de ejecución solo existen en el trabajo.
+                        if me.scope.is_design() {
+                            return;
+                        }
                         // Bool/select se commitean al instante; texto/número
                         // al salir del campo (paridad SPA `handleParams`).
                         let mut params = me.store.params_for(&step_id);
@@ -2055,11 +2649,27 @@ fn build_window(app: &Application, scope: WindowScope, open_paths: &[PathBuf]) -
                     }
                 })
             },
-        })
-    });
+        });
+        panel.set_caps(if is_design {
+            StepCaps {
+                structural_edit: true,
+                run: false,
+                values: false,
+            }
+        } else {
+            StepCaps {
+                structural_edit: false,
+                run: true,
+                values: true,
+            }
+        });
+        Some(panel)
+    } else {
+        None
+    };
 
     // Contadores de validación del toolbar (§6) con su popover-resumen.
-    let counters = is_project.then(|| {
+    let counters = has_pipeline.then(|| {
         Counters::new({
             let slot = slot.clone();
             Rc::new(move |step_id| {
@@ -2070,9 +2680,9 @@ fn build_window(app: &Application, scope: WindowScope, open_paths: &[PathBuf]) -
         })
     });
 
-    // Panel de logs inferior (§6): Stop siempre visible, su sensibilidad la
-    // fija `apply_running_ui`.
-    let logs = is_project.then(|| {
+    // Panel de logs inferior (§6): SOLO ventanas de trabajo. Stop siempre
+    // visible, su sensibilidad la fija `apply_running_ui`.
+    let logs = is_work.then(|| {
         LogsPanel::new(&palette, {
             let slot = slot.clone();
             Rc::new(move || {
@@ -2083,26 +2693,36 @@ fn build_window(app: &Application, scope: WindowScope, open_paths: &[PathBuf]) -
         })
     });
 
-    // Toolbar §6: nombre del proyecto + contadores + Run selected, Stop,
-    // Import pipeline y Create step.
-    let (toolbar, run_btn, stop_btn) = if is_project {
+    // Toolbar §6 por tipo de ventana: DISEÑO → `<nombre>.pipeline · raíz de
+    // la librería` (la ubicación queda visible, decisión #2) + contadores +
+    // Save/Import; TRABAJO → carpeta + contadores + Run selected/Stop.
+    // Sin superficie de pipeline no hay toolbar.
+    let (toolbar, run_btn, stop_btn, design_label) = if has_pipeline {
         let toolbar = GtkBox::new(Orientation::Horizontal, 8);
         toolbar.set_margin_start(8);
         toolbar.set_margin_end(8);
         toolbar.set_margin_top(4);
         toolbar.set_margin_bottom(4);
         toolbar.add_css_class("opm-toolbar");
-        let project_label = gtk4::Label::new(
-            scope
-                .project_root()
-                .and_then(|root| {
-                    root.file_name()
-                        .map(|name| name.to_string_lossy().into_owned())
-                })
-                .as_deref(),
-        );
-        project_label.add_css_class("heading");
-        toolbar.append(&project_label);
+        let mut design_label: Option<gtk4::Label> = None;
+        if is_design {
+            let label = gtk4::Label::new(None);
+            label.set_ellipsize(gtk4::pango::EllipsizeMode::Middle);
+            label.set_tooltip_text(Some(&project::library_root().display().to_string()));
+            label.add_css_class("heading");
+            toolbar.append(&label);
+            design_label = Some(label);
+        } else {
+            let root = scope.project_root();
+            let name = root.as_deref().and_then(|root| {
+                root.file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+            });
+            let project_label = gtk4::Label::new(name.as_deref());
+            project_label.set_tooltip_text(root.as_deref().map(|root| root.display().to_string()).as_deref().map(str::to_owned).as_deref());
+            project_label.add_css_class("heading");
+            toolbar.append(&project_label);
+        }
         if let Some(counters) = &counters {
             toolbar.append(&counters.widget());
         }
@@ -2114,53 +2734,61 @@ fn build_window(app: &Application, scope: WindowScope, open_paths: &[PathBuf]) -
             button.add_css_class("flat");
             button
         };
-        let run_btn = button("Run selected");
-        {
-            let slot = slot.clone();
-            run_btn.connect_clicked(move |_| {
-                if let Some(me) = slot.borrow().as_ref().and_then(Weak::upgrade) {
-                    me.run_selected();
-                }
-            });
+        if is_design {
+            // Diseño: guardar/importar; sin Run/Stop (no hay ejecución).
+            let save_btn = button("Save");
+            save_btn.set_tooltip_text(Some("Save pipeline into the library"));
+            {
+                let slot = slot.clone();
+                save_btn.connect_clicked(move |_| {
+                    if let Some(me) = slot.borrow().as_ref().and_then(Weak::upgrade) {
+                        me.save_pipeline();
+                    }
+                });
+            }
+            let import_btn = button("Import");
+            import_btn.set_tooltip_text(Some("Import a YAML/JSON pipeline"));
+            {
+                let slot = slot.clone();
+                import_btn.connect_clicked(move |_| {
+                    if let Some(me) = slot.borrow().as_ref().and_then(Weak::upgrade) {
+                        me.import_pipeline();
+                    }
+                });
+            }
+            toolbar.append(&save_btn);
+            toolbar.append(&import_btn);
+            (Some(toolbar), None, None, design_label)
+        } else {
+            // Trabajo: ejecución; sin Save/Import (el dominio es run.json).
+            let run_btn = button("Run selected");
+            {
+                let slot = slot.clone();
+                run_btn.connect_clicked(move |_| {
+                    if let Some(me) = slot.borrow().as_ref().and_then(Weak::upgrade) {
+                        me.run_selected();
+                    }
+                });
+            }
+            let stop_btn = button("Stop");
+            {
+                let slot = slot.clone();
+                stop_btn.connect_clicked(move |_| {
+                    if let Some(me) = slot.borrow().as_ref().and_then(Weak::upgrade) {
+                        me.stop();
+                    }
+                });
+            }
+            toolbar.append(&run_btn);
+            toolbar.append(&stop_btn);
+            (Some(toolbar), Some(run_btn), Some(stop_btn), design_label)
         }
-        let stop_btn = button("Stop");
-        {
-            let slot = slot.clone();
-            stop_btn.connect_clicked(move |_| {
-                if let Some(me) = slot.borrow().as_ref().and_then(Weak::upgrade) {
-                    me.stop();
-                }
-            });
-        }
-        let import_btn = button("Import pipeline");
-        {
-            let slot = slot.clone();
-            import_btn.connect_clicked(move |_| {
-                if let Some(me) = slot.borrow().as_ref().and_then(Weak::upgrade) {
-                    me.import_pipeline();
-                }
-            });
-        }
-        let create_btn = button("Create step");
-        {
-            let slot = slot.clone();
-            create_btn.connect_clicked(move |_| {
-                if let Some(me) = slot.borrow().as_ref().and_then(Weak::upgrade) {
-                    me.create_step();
-                }
-            });
-        }
-        toolbar.append(&run_btn);
-        toolbar.append(&stop_btn);
-        toolbar.append(&import_btn);
-        toolbar.append(&create_btn);
-        (Some(toolbar), Some(run_btn), Some(stop_btn))
     } else {
-        (None, None, None)
+        (None, None, None, None)
     };
 
-    // Columna central: franja + find bar + stack de páginas (solo ventanas
-    // standalone; en proyecto se envuelve en su caja-panel más abajo).
+    // Columna central: franja + find bar + stack de páginas (se envuelve en
+    // su caja-panel solo cuando hay paneles hermanos: explorador o paso).
     let center_col = GtkBox::new(Orientation::Vertical, 0);
     center_col.append(&strip);
     center_col.append(&find_bar.widget());
@@ -2170,55 +2798,55 @@ fn build_window(app: &Application, scope: WindowScope, open_paths: &[PathBuf]) -
     // Estilo «borde + cabecera» (§6): cada región es una caja `opm-panel`
     // con cabecera (`Explorer`, `Pipeline`, `Step`, `Logs`) y los `Paned`
     // separadores tienen agarre visible (≥5px, CSS `paned > separator`).
-    let (content, explorer_paned, explorer_visible, explorer_panel) = match &explorer
-    {
-        Some(explorer) => {
-            let explorer_panel = panel_box("Explorer", &explorer.widget());
-            let center_panel = panel_box("Pipeline", &center_col);
-            // `explorador | (centro | panel de paso)`: dos mangos para las
-            // tres cajas redimensionables del §6.
-            let step_width = 360;
-            let inner = Paned::new(Orientation::Horizontal);
-            inner.set_wide_handle(true);
-            inner.set_start_child(Some(&center_panel));
-            if let Some(step_panel) = &step_panel {
-                let step_panel_box = panel_box("Step", &step_panel.widget());
-                inner.set_end_child(Some(&step_panel_box));
-            }
-            let explorer_width = if explorer_state.visible {
-                explorer_state.width
-            } else {
-                0
-            };
-            inner.set_position(
-                (window.default_width() - explorer_width - step_width).max(240),
-            );
-            let main_paned = Paned::new(Orientation::Horizontal);
-            main_paned.set_wide_handle(true);
-            main_paned.set_end_child(Some(&inner));
-            if explorer_state.visible {
-                main_paned.set_start_child(Some(&explorer_panel));
-                main_paned.set_position(explorer_state.width);
-            }
-            // Partición horizontal visible sobre la consola de logs (§6:
-            // «bottom logs»), con la consola autosuficiente dentro de su
-            // propia caja-panel.
-            let vertical = Paned::new(Orientation::Vertical);
-            vertical.set_wide_handle(true);
-            vertical.set_start_child(Some(&main_paned));
-            if let Some(logs) = &logs {
-                vertical.set_end_child(Some(&logs.widget()));
-            }
-            vertical.set_position((window.default_height() - 300).max(240));
-            (
-                vertical.clone().upcast::<Widget>(),
-                Some(main_paned),
-                explorer_state.visible,
-                Some(explorer_panel),
-            )
-        }
-        None => (center_col.clone().upcast::<Widget>(), None, false, None),
+    // Composición por presencia — DISEÑO: `centro | paso`; FOLDER:
+    // `explorador | centro`; TRABAJO: las cuatro cajas; STANDALONE: centro.
+    let explorer_width = if explorer_state.visible {
+        explorer_state.width
+    } else {
+        0
     };
+    let mut current: Widget = if step_panel.is_some() || explorer.is_some() {
+        panel_box(
+            if has_pipeline { "Pipeline" } else { "Workspace" },
+            &center_col,
+        )
+        .upcast()
+    } else {
+        center_col.clone().upcast()
+    };
+    let mut explorer_paned: Option<Paned> = None;
+    let mut explorer_panel: Option<GtkBox> = None;
+    let explorer_visible = explorer.is_some() && explorer_state.visible;
+    if let Some(step_panel) = &step_panel {
+        let inner = Paned::new(Orientation::Horizontal);
+        inner.set_wide_handle(true);
+        inner.set_start_child(Some(&current));
+        inner.set_end_child(Some(&panel_box("Step", &step_panel.widget())));
+        inner.set_position((window.default_width() - explorer_width - 360).max(240));
+        current = inner.upcast();
+    }
+    if let Some(explorer) = &explorer {
+        let panel = panel_box("Explorer", &explorer.widget());
+        let main_paned = Paned::new(Orientation::Horizontal);
+        main_paned.set_wide_handle(true);
+        main_paned.set_end_child(Some(&current));
+        if explorer_state.visible {
+            main_paned.set_start_child(Some(&panel));
+            main_paned.set_position(explorer_state.width);
+        }
+        explorer_paned = Some(main_paned.clone());
+        explorer_panel = Some(panel);
+        current = main_paned.upcast();
+    }
+    if let Some(logs) = &logs {
+        let vertical = Paned::new(Orientation::Vertical);
+        vertical.set_wide_handle(true);
+        vertical.set_start_child(Some(&current));
+        vertical.set_end_child(Some(&logs.widget()));
+        vertical.set_position((window.default_height() - 300).max(240));
+        current = vertical.upcast();
+    }
+    let content = current;
 
     let vbox = GtkBox::new(Orientation::Vertical, 0);
     vbox.append(&menubar);
@@ -2244,12 +2872,14 @@ fn build_window(app: &Application, scope: WindowScope, open_paths: &[PathBuf]) -
         explorer_visible: Cell::new(explorer_visible),
         explorer_state: RefCell::new(explorer_state),
         store,
+        design: is_design.then(|| RefCell::new(DesignState::new(""))),
+        design_label,
         exec,
         run_model: RefCell::new(RunModel::new()),
         running: Cell::new(false),
         selected_step: RefCell::new(None),
         stack,
-        center_view: RefCell::new(if is_project {
+        center_view: RefCell::new(if has_pipeline {
             CenterView::Pipeline
         } else {
             CenterView::Editor
@@ -2316,14 +2946,16 @@ fn build_window(app: &Application, scope: WindowScope, open_paths: &[PathBuf]) -
         }
     });
 
-    // Página inicial: «Pipeline» en proyecto (paridad SPA), editor en
-    // standalone; después el contenido activo y el primer refresco de
-    // dominio (canvas, contadores, panel).
-    cmds.show_view(if is_project {
+    // Página inicial: «Pipeline» en ventanas con superficie de pipeline
+    // (paridad SPA), editor en standalone/folder; después el contenido
+    // activo, la etiqueta de diseño (nombre + raíz de librería) y el primer
+    // refresco de dominio (canvas, contadores, panel).
+    cmds.show_view(if has_pipeline {
         CenterView::Pipeline
     } else {
         CenterView::Editor
     });
+    cmds.refresh_design_label();
     cmds.apply_running_ui();
     cmds.reload_active();
     cmds.refresh_domain();
@@ -2355,16 +2987,19 @@ fn main() {
             build_window(app, WindowScope::Standalone, &files);
         }
         for folder in &folders {
-            build_window(app, WindowScope::Project(folder.clone()), &[]);
+            // Una carpeta CON `run.json` abre ventana de trabajo; sin él,
+            // solo explorador (pipeline-storage).
+            let scope = project::scope_for_folder(folder.clone());
+            build_window(app, scope, &[]);
         }
         if files.is_empty() && folders.is_empty() {
             // §11 A13/§6: restauración de la sesión con TTL de 1 h. Una
             // sesión caducada se limpia en silencio (paridad SPA) y una que
-            // apunta a algo inválido se limpia MOSTRANDO el error; sin
-            // sesión, la ventana standalone de siempre.
+            // apunta a algo inválido (sin `run.json` o corrupto) se limpia
+            // MOSTRANDO el error; sin sesión, la ventana standalone.
             match project::restore() {
-                project::Restore::Open(root) => {
-                    build_window(app, WindowScope::Project(root), &[]);
+                project::Restore::Work(root) => {
+                    build_window(app, WindowScope::Work(root), &[]);
                 }
                 project::Restore::Failed(message) => {
                     let cmds = build_window(app, WindowScope::Standalone, &[]);
@@ -2507,5 +3142,114 @@ mod tests {
         assert_eq!(dirty_tabs_under(&tabs, &path).len(), 1);
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// P2 (revisión): en una ventana de DISEÑO el store está SIN abrir —
+    /// ¿igual el diálogo de paso ofrece las opciones «From output»? El ancla
+    /// es la raíz de la librería y la aritmética es exactamente la que
+    /// guardará la carpeta de trabajo (raíz común cancelada, P2-15): el
+    /// productor aparece con su ruta relativa correcta.
+    #[test]
+    fn opciones_from_output_en_diseño_sin_store() {
+        use opm_pipeline::OutputSpec;
+        use pipeline::step_dialog::output_choices;
+
+        // Documento de diseño de DOS pasos, construido sin ningún store.
+        let producer = PipelineStep {
+            id: "prep".to_owned(),
+            name: "prep".to_owned(),
+            description: String::new(),
+            command: "echo prep".to_owned(),
+            environment: String::new(),
+            working_directory: "steps/prep/work".to_owned(),
+            inputs: Vec::new(),
+            outputs: vec![OutputSpec {
+                key: "result".to_owned(),
+                label: None,
+                path: "result.txt".to_owned(),
+            }],
+            parameters: Vec::new(),
+            dependencies: Vec::new(),
+        };
+        let consumer = PipelineStep {
+            id: "consume".to_owned(),
+            name: "consume".to_owned(),
+            description: String::new(),
+            command: "cat {entrada}".to_owned(),
+            environment: String::new(),
+            working_directory: "steps/consume/work".to_owned(),
+            inputs: Vec::new(),
+            outputs: Vec::new(),
+            parameters: Vec::new(),
+            dependencies: Vec::new(),
+        };
+        let mut design = DesignState::new("demo");
+        design.create_step(producer).unwrap();
+        design.create_step(consumer).unwrap();
+
+        // El store de una ventana de diseño nunca se abre.
+        let store = ProjectStore::new();
+        assert!(store.project_root().is_err(), "store sin abrir");
+        let root = step_dialog_root(&store, &WindowScope::Design)
+            .expect("diseño se ancla en la raíz de la librería");
+
+        let choices = output_choices(
+            Some(root.as_path()),
+            &design.steps(),
+            None,
+            "steps/consume/work",
+        );
+        assert_eq!(choices.len(), 1, "el output del productor: {choices:?}");
+        assert_eq!(choices[0].step_id, "prep");
+        assert_eq!(choices[0].output_key, "result");
+        assert_eq!(choices[0].label, "prep -> result.txt");
+        assert_eq!(
+            choices[0].default_value, "../../prep/work/result.txt",
+            "relativa desde el wd consumidor hasta el output del productor"
+        );
+
+        // P2-15: con cualquier otra raíz ancla (p. ej. la de una carpeta
+        // de trabajo real) la cadena es IDÉNTICA — la raíz común se cancela
+        // en la relativa.
+        let work_anchor = Path::new("/otra/raiz/absoluta");
+        let from_work = output_choices(
+            Some(work_anchor),
+            &design.steps(),
+            None,
+            "steps/consume/work",
+        );
+        assert_eq!(from_work[0].default_value, choices[0].default_value);
+
+        // Ventanas sin dominio de pipeline: sin ancla (no hay diálogo allí).
+        assert_eq!(step_dialog_root(&store, &WindowScope::Standalone), None);
+        assert_eq!(
+            step_dialog_root(&store, &WindowScope::Folder(PathBuf::from("/tmp/carpeta"))),
+            None
+        );
+    }
+
+    /// Ventana de TRABAJO: la raíz del diálogo sigue siendo la carpeta
+    /// abierta (comportamiento previo intacto).
+    #[test]
+    fn opciones_from_output_en_trabajo_usa_la_raiz_del_store() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let folder = std::env::temp_dir().join(format!(
+            "opm-dialog-root-{}-{nanos}",
+            std::process::id()
+        ));
+        let store = ProjectStore::new();
+        let doc = PipelineDoc::new("demo", PipelineConfig::default());
+        store.create_work(&folder, &doc).unwrap();
+        store.open_work(&folder).unwrap();
+
+        let scope = WindowScope::Work(folder.clone());
+        let root = step_dialog_root(&store, &scope)
+            .expect("la carpeta de trabajo abierta es la raíz");
+        assert_eq!(root, opm_fs::canonicalize(&folder).unwrap());
+
+        let _ = std::fs::remove_dir_all(&folder);
     }
 }

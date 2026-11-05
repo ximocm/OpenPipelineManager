@@ -9,16 +9,17 @@
 //!
 //! - el estado del explorador (`explorer.visible`, `explorer.width`), con
 //!   su lógica pura delegada en [`crate::explorer`];
-//! - el hueco de sesión `last_project` (`last_project` + `last_project_at`,
+//! - el hueco de sesión `last_work` (`last_work` + `last_work_at`,
 //!   timestamp unix): `crate::project::restore` lee este hueco y aplica la
-//!   semántica de sesión con TTL de 1 h (paridad con el SPA).
+//!   semántica de sesión con TTL de 1 h (paridad con el SPA) sobre la última
+//!   carpeta de trabajo abierta.
 //!
 //! Formato `clave=valor` (una por línea) leído de forma tolerante: claves
 //! desconocidas y valores ilegibles se ignoran y dejan el default. Toda
 //! escritura es atómica ([`opm_fs::write_atomic`], §48) y de reemplazo del
 //! fichero entero: cada guardado relé el estado completo, cambia SU clave y
 //! reescribe, de modo que las claves de otros módulos no se pierden.
-//! Un `last_project` con saltos de línea en la ruta no se persiste (rompería
+//! Un `last_work` con saltos de línea en la ruta no se persiste (rompería
 //! el formato de una línea por clave; se prefiere no restaurar).
 
 use crate::explorer::ExplorerState;
@@ -29,7 +30,7 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 struct UiState {
     explorer: ExplorerState,
-    last_project: Option<(String, i64)>,
+    last_work: Option<(String, i64)>,
 }
 
 /// Ruta de `ui.ini` en el directorio de configuración por SO.
@@ -59,13 +60,13 @@ fn parse_state(text: &str) -> UiState {
             continue;
         };
         match key.trim() {
-            "last_project" => {
+            "last_work" => {
                 let value = value.trim();
                 if !value.is_empty() {
                     path = Some(value.to_owned());
                 }
             }
-            "last_project_at" => at = value.trim().parse::<i64>().ok(),
+            "last_work_at" => at = value.trim().parse::<i64>().ok(),
             _ => {}
         }
     }
@@ -73,7 +74,7 @@ fn parse_state(text: &str) -> UiState {
         explorer,
         // El hueco solo vale con ruta Y timestamp (una clave huérfana no
         // restaura nada).
-        last_project: path.zip(at),
+        last_work: path.zip(at),
     }
 }
 
@@ -81,9 +82,9 @@ fn parse_state(text: &str) -> UiState {
 /// formato propio), después el hueco de sesión.
 fn compose_state(state: &UiState) -> String {
     let mut text = crate::explorer::serialize_explorer_text(&state.explorer);
-    if let Some((path, at)) = &state.last_project {
+    if let Some((path, at)) = &state.last_work {
         if !path.contains('\n') && !path.contains('\r') {
-            text.push_str(&format!("last_project={path}\nlast_project_at={at}\n"));
+            text.push_str(&format!("last_work={path}\nlast_work_at={at}\n"));
         }
     }
     text
@@ -124,27 +125,28 @@ pub fn save_explorer_to(path: &Path, state: &ExplorerState) -> std::io::Result<(
     write_state(path, &ui)
 }
 
-/// Hueco de sesión: último proyecto abierto con su timestamp unix; `None`
-/// sin archivo legible. `crate::project` aplica el TTL de 1 h sobre este
-/// valor (restauración de sesión; el alta la hace `build_window`).
-pub fn load_last_project() -> Option<(String, i64)> {
-    load_last_project_from(&state_file())
+/// Hueco de sesión: última carpeta de trabajo abierta con su timestamp unix;
+/// `None` sin archivo legible. `crate::project` aplica el TTL de 1 h sobre
+/// este valor (restauración de sesión; el alta la hace `build_window` cuando
+/// abre una ventana de trabajo).
+pub fn load_last_work() -> Option<(String, i64)> {
+    load_last_work_from(&state_file())
 }
 
-/// [`load_last_project`] sobre una ruta explícita (tests).
-pub fn load_last_project_from(path: &Path) -> Option<(String, i64)> {
-    read_state(path).last_project
+/// [`load_last_work`] sobre una ruta explícita (tests).
+pub fn load_last_work_from(path: &Path) -> Option<(String, i64)> {
+    read_state(path).last_work
 }
 
 /// Guarda el hueco de sesión conservando el resto de claves.
-pub fn save_last_project(slot: &Option<(String, i64)>) -> std::io::Result<()> {
-    save_last_project_to(&state_file(), slot)
+pub fn save_last_work(slot: &Option<(String, i64)>) -> std::io::Result<()> {
+    save_last_work_to(&state_file(), slot)
 }
 
-/// [`save_last_project`] sobre una ruta explícita (tests).
-pub fn save_last_project_to(path: &Path, slot: &Option<(String, i64)>) -> std::io::Result<()> {
+/// [`save_last_work`] sobre una ruta explícita (tests).
+pub fn save_last_work_to(path: &Path, slot: &Option<(String, i64)>) -> std::io::Result<()> {
     let mut ui = read_state(path);
-    ui.last_project = slot.clone();
+    ui.last_work = slot.clone();
     write_state(path, &ui)
 }
 
@@ -167,14 +169,14 @@ mod tests {
     fn sin_archivo_las_claves_dan_sus_defaults() {
         let path = temp_file("ausente");
         assert_eq!(load_explorer_from(&path), ExplorerState::default());
-        assert_eq!(load_last_project_from(&path), None);
+        assert_eq!(load_last_work_from(&path), None);
     }
 
     #[test]
     fn roundtrip_explorer_sin_tocar_el_hueco_de_sesion() {
         let path = temp_file("explorer");
         let slot = Some(("/proyecto/uno".to_owned(), 1_700_000_000_i64));
-        save_last_project_to(&path, &slot).unwrap();
+        save_last_work_to(&path, &slot).unwrap();
 
         let state = ExplorerState {
             visible: false,
@@ -183,7 +185,7 @@ mod tests {
         save_explorer_to(&path, &state).unwrap();
         assert_eq!(load_explorer_from(&path), state);
         // Reescritura de reemplazo completo: el hueco de sesión sobrevive.
-        assert_eq!(load_last_project_from(&path), slot);
+        assert_eq!(load_last_work_from(&path), slot);
         std::fs::remove_file(&path).unwrap();
     }
 
@@ -197,13 +199,13 @@ mod tests {
         save_explorer_to(&path, &explorer).unwrap();
 
         let slot = Some(("/datos/proyecto x".to_owned(), 42_i64));
-        save_last_project_to(&path, &slot).unwrap();
-        assert_eq!(load_last_project_from(&path), slot);
+        save_last_work_to(&path, &slot).unwrap();
+        assert_eq!(load_last_work_from(&path), slot);
         assert_eq!(load_explorer_from(&path), explorer);
 
         // Quitar la sesión conserva el explorador.
-        save_last_project_to(&path, &None).unwrap();
-        assert_eq!(load_last_project_from(&path), None);
+        save_last_work_to(&path, &None).unwrap();
+        assert_eq!(load_last_work_from(&path), None);
         assert_eq!(load_explorer_from(&path), explorer);
         std::fs::remove_file(&path).unwrap();
     }
@@ -212,7 +214,7 @@ mod tests {
     fn tolerante_a_basura_y_a_claves_huerfanas() {
         let state = parse_state(
             "linea rota\nexplorer.visible=false\nexplorer.width=mucha\n\
-             last_project=/solo-ruta\notra=1\n",
+             last_work=/solo-ruta\notra=1\n",
         );
         // Ancho ilegible → default; visible sí se aplica; sesión incompleta
         // (sin timestamp) no restaura.
@@ -223,16 +225,16 @@ mod tests {
                 width: ExplorerState::default().width,
             }
         );
-        assert_eq!(state.last_project, None);
+        assert_eq!(state.last_work, None);
     }
 
     #[test]
     fn ruta_con_salto_de_linea_no_se_persiste() {
         let path = temp_file("newline");
         let slot = Some(("/mal\nexplorer.width=99999".to_owned(), 7_i64));
-        save_last_project_to(&path, &slot).unwrap();
+        save_last_work_to(&path, &slot).unwrap();
         // No se guardó (rompería el formato): nada restaurable…
-        assert_eq!(load_last_project_from(&path), None);
+        assert_eq!(load_last_work_from(&path), None);
         // …y el ancho del explorador no fue secuestrado.
         assert_eq!(
             load_explorer_from(&path).width,

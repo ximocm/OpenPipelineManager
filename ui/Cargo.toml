@@ -1,6 +1,6 @@
 [package]
 name = "opm-ui"
-version = "0.2.1"
+version = "0.3.0"
 edition = "2021"
 license = "LicenseRef-Attribution-NonCommercial"
 description = "Open Pipeline Manager — UI GTK4 (binario `opm`)"
@@ -23,3 +23,6 @@ opm-exec = { path = "../core/opm-exec" }
 
 # Estado de la UI en el directorio de configuración por SO (§11 A13).
 directories = "6"
+# Envolventes JSON versionadas de `opm-store` (lectura de `source.name` en
+# `run.json` y de documentos `.pipeline` en el fallback de adopt).
+serde_json = "1"
