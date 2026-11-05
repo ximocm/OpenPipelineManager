@@ -20,6 +20,7 @@ The format follows Keep a Changelog-style sections, and the project uses semanti
 
 ### Fixed
 
+- `File > Save` and `Ctrl+S` now dispatch by the visible page (like `Close Tab`): in a Design window the Pipeline page saves the design document to the library instead of silently routing to the active text tab and generating an `untitled*.txt`; images and the read-only Pipeline page of work windows have nothing to save.
 - Adapted YAML model deserialization to the updated parser while preserving pipeline aliases, quoted boolean values, non-finite numeric validation, and invalid-document errors.
 - Made cancellation test commands replace their shell process so CI does not intermittently wait on an unsupported descendant process holding an output pipe open.
 
