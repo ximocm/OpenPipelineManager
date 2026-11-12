@@ -7,7 +7,7 @@
 //! - posiciones de [`CanvasData::build`] con fallback `x=80+i·330, y=120`
 //!   cuando `visual_layout` no tiene la entrada;
 //! - **tres clases de arista** (A9): *order* (pasos consecutivos, recta
-//!   gris, inmutable), *output* (`input.source_step → paso`, teal discontinua
+//!   gris, inmutable), *output* (`input.source_step → paso`, teal continua
 //!   en carril curvo, inmutable) y *dependency* (entradas EXPLÍCITAS de
 //!   `target.dependencies` no implicadas por los enlaces de input — la
 //!   storage las rederiva en cada carga, así que exponerlas como editables
@@ -25,13 +25,13 @@ use std::collections::HashMap;
 use opm_pipeline::PipelineStep;
 use opm_store::{Position, ProjectSnapshot, StepState, StepStatus};
 
-// --- Constantes geométricas (§6: fallback x=80+i·330, y=120) ---------------
+// --- Constantes geométricas (§6: fallback x=80, y=120+i·180) ---------------
 
 pub const NODE_START_X: f64 = 80.0;
 pub const NODE_START_Y: f64 = 120.0;
-pub const NODE_GAP_X: f64 = 330.0;
-/// Ancho de la tarjeta de nodo (menor que el paso de 330 para que las
-/// aristas rectas quepan).
+pub const NODE_GAP_Y: f64 = 180.0;
+/// Ancho de la tarjeta de nodo (deja margen para las aristas entre
+/// columnas de pasos en paralelo).
 pub const NODE_WIDTH: f64 = 260.0;
 pub const NODE_HEIGHT: f64 = 96.0;
 /// Tolerancia de hit-testing de aristas en px de pantalla (A9).
@@ -102,7 +102,7 @@ impl ViewTransform {
 pub enum EdgeKind {
     /// Pasos consecutivos: recta gris `#475569`, inmutable.
     Order,
-    /// `input.source_step → paso`: teal `#0f766e` discontinua en carril
+    /// `input.source_step → paso`: teal `#0f766e` continua en carril
     /// curvo, inmutable.
     Output,
     /// Dependencia explícita no implicada por inputs: sólida, seleccionable
@@ -149,14 +149,36 @@ impl Edge {
             .collect()
     }
 
-    /// Ancla de origen (centro derecho del nodo origen).
+    /// Ancla de origen elegida según la orientación del enlace.
     pub fn source_anchor(&self) -> (f64, f64) {
         self.from
     }
 
-    /// Ancla de destino (centro izquierdo del nodo destino).
+    /// Ancla de destino elegida según la orientación del enlace.
     pub fn target_anchor(&self) -> (f64, f64) {
         self.to
+    }
+}
+
+/// A connection port on one side of the node card.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConnectionSide {
+    Top,
+    Right,
+    Bottom,
+    Left,
+}
+
+impl ConnectionSide {
+    pub const ALL: [Self; 4] = [Self::Top, Self::Right, Self::Bottom, Self::Left];
+
+    fn outward(self) -> (f64, f64) {
+        match self {
+            Self::Top => (0.0, -1.0),
+            Self::Right => (1.0, 0.0),
+            Self::Bottom => (0.0, 1.0),
+            Self::Left => (-1.0, 0.0),
+        }
     }
 }
 
@@ -181,12 +203,27 @@ impl Node {
         )
     }
 
-    pub fn source_anchor(&self) -> (f64, f64) {
-        (self.position.0 + NODE_WIDTH, self.position.1 + NODE_HEIGHT / 2.0)
+    pub fn anchor(&self, side: ConnectionSide) -> (f64, f64) {
+        let (dx, dy) = side.outward();
+        (
+            self.position.0 + NODE_WIDTH * (1.0 + dx) / 2.0,
+            self.position.1 + NODE_HEIGHT * (1.0 + dy) / 2.0,
+        )
     }
 
-    pub fn target_anchor(&self) -> (f64, f64) {
-        (self.position.0, self.position.1 + NODE_HEIGHT / 2.0)
+    /// Pick facing ports from the relative node positions, without storing
+    /// orientation in the pipeline document or changing dependency semantics.
+    fn facing_sides(&self, target: &Node) -> (ConnectionSide, ConnectionSide) {
+        let dx = target.position.0 - self.position.0;
+        let dy = target.position.1 - self.position.1;
+        if dy.abs() > dx.abs() {
+            if dy >= 0.0 { (ConnectionSide::Bottom, ConnectionSide::Top) }
+            else { (ConnectionSide::Top, ConnectionSide::Bottom) }
+        } else if dx >= 0.0 {
+            (ConnectionSide::Right, ConnectionSide::Left)
+        } else {
+            (ConnectionSide::Left, ConnectionSide::Right)
+        }
     }
 
     /// Rectángulo del checkbox en coordenadas de mundo.
@@ -276,11 +313,12 @@ pub struct CanvasModel {
 }
 
 impl CanvasModel {
-    /// Posición por defecto del paso `index` (§6: `x=80+i·330, y=120`).
+    /// Posición por defecto del paso `index` (§6: `x=80, y=120+i·180`, flujo
+    /// de arriba a abajo).
     pub fn default_position(index: usize) -> (f64, f64) {
         (
-            NODE_START_X + index as f64 * NODE_GAP_X,
-            NODE_START_Y,
+            NODE_START_X,
+            NODE_START_Y + index as f64 * NODE_GAP_Y,
         )
     }
 
@@ -340,19 +378,20 @@ impl CanvasModel {
                 .get(&edge.target)
                 .map(|state| state.status == StepStatus::Running)
                 .unwrap_or(false);
-            edge.from = source.source_anchor();
-            edge.to = target.target_anchor();
+            let (source_side, target_side) = source.facing_sides(target);
+            edge.from = source.anchor(source_side);
+            edge.to = target.anchor(target_side);
             let skip = match (index_of(&edge.source), index_of(&edge.target)) {
                 (Some(a), Some(b)) => (a.abs_diff(b)).max(1),
                 _ => 1,
             };
             // El arco se escala con la distancia: un lift fijo para saltos
             // cortos crea una aguja (los puntos de control casi coinciden).
-            let dx = (edge.to.0 - edge.from.0).abs().max(1.0);
+            let span = distance(edge.from, edge.to).max(1.0);
             let bend = match edge.kind {
                 EdgeKind::Order => 0.0,
-                EdgeKind::Output => (dx * 0.32 + skip as f64 * 18.0).clamp(36.0, 180.0),
-                EdgeKind::Dependency => (dx * 0.30 + skip as f64 * 16.0).clamp(32.0, 160.0),
+                EdgeKind::Output => (span * 0.32 + skip as f64 * 18.0).clamp(36.0, 180.0),
+                EdgeKind::Dependency => -(span * 0.30 + skip as f64 * 16.0).clamp(32.0, 160.0),
             };
             let (control1, control2) = if edge.kind == EdgeKind::Order {
                 // Recta: puntos de control sobre la línea (muestreo lineal).
@@ -361,7 +400,7 @@ impl CanvasModel {
                     lerp(edge.from, edge.to, 2.0 / 3.0),
                 )
             } else {
-                curved_controls(edge.from, edge.to, bend)
+                curved_controls(edge.from, edge.to, source_side, target_side, bend)
             };
             edge.control1 = control1;
             edge.control2 = control2;
@@ -387,19 +426,23 @@ impl CanvasModel {
         world.0 >= x && world.0 <= x + w && world.1 >= y && world.1 <= y + h
     }
 
-    /// Nodo cuyo mango de conexión (centro derecho) está a ≤ tolerancia de
-    /// pantalla del punto — en **espacio de pantalla** (A9).
-    pub fn hit_handle(
+    /// One shared port geometry for drawing and screen-space hit testing.
+    pub fn hit_port(
         &self,
         screen: (f64, f64),
         transform: &ViewTransform,
-    ) -> Option<usize> {
-        self.nodes
-            .iter()
-            .position(|node| {
-                let anchor = transform.to_screen(node.source_anchor());
-                distance(anchor, screen) <= HANDLE_TOLERANCE_PX
-            })
+    ) -> Option<(usize, ConnectionSide)> {
+        let mut best: Option<(usize, ConnectionSide, f64)> = None;
+        for (index, node) in self.nodes.iter().enumerate() {
+            for side in ConnectionSide::ALL {
+                let anchor = transform.to_screen(node.anchor(side));
+                let distance = distance(anchor, screen);
+                if distance <= HANDLE_TOLERANCE_PX && best.is_none_or(|(_, _, nearest)| distance < nearest) {
+                    best = Some((index, side, distance));
+                }
+            }
+        }
+        best.map(|(index, side, _)| (index, side))
     }
 
     /// Arista de dependencia cuyo trazado pasa a ≤ tolerancia de pantalla
@@ -613,25 +656,21 @@ fn lerp(a: (f64, f64), b: (f64, f64), t: f64) -> (f64, f64) {
     (a.0 + (b.0 - a.0) * t, a.1 + (b.1 - a.1) * t)
 }
 
-/// Puntos de control del cubico del port de `curvedPath` (SPA).
+/// Curved lanes leave and approach the chosen sides outside the cards.
 fn curved_controls(
     source: (f64, f64),
     target: (f64, f64),
-    vertical_bend: f64,
+    source_side: ConnectionSide,
+    target_side: ConnectionSide,
+    lane: f64,
 ) -> ((f64, f64), (f64, f64)) {
-    let dx = target.0 - source.0;
-    let direction = if dx >= 0.0 { 1.0 } else { -1.0 };
-    let distance = dx.abs().max(1.0);
-    let horizontal_bend = (distance * 0.38).clamp(32.0, 220.0);
+    let reach = (distance(source, target) * 0.38).clamp(24.0, 220.0);
+    let from = source_side.outward();
+    let to = target_side.outward();
+    let offset = if from.0 == 0.0 { (lane, 0.0) } else { (0.0, -lane) };
     (
-        (
-            source.0 + direction * horizontal_bend,
-            source.1 - vertical_bend,
-        ),
-        (
-            target.0 - direction * horizontal_bend,
-            target.1 - vertical_bend,
-        ),
+        (source.0 + from.0 * reach + offset.0, source.1 + from.1 * reach + offset.1),
+        (target.0 + to.0 * reach + offset.0, target.1 + to.1 * reach + offset.1),
     )
 }
 
@@ -718,15 +757,15 @@ mod tests {
         }
     }
 
-    /// Fallback de posición §6: `x=80+i·330, y=120`; `visual_layout`
-    /// manda cuando existe.
+    /// Fallback de posición §6: los pasos sin layout se apilan de arriba a
+    /// abajo en la misma columna; `visual_layout` manda cuando existe.
     #[test]
     fn posiciones_con_fallback() {
-        assert_eq!(
-            CanvasModel::default_position(0),
-            (NODE_START_X, NODE_START_Y)
-        );
-        assert_eq!(CanvasModel::default_position(3), (80.0 + 3.0 * 330.0, 120.0));
+        let (x0, y0) = CanvasModel::default_position(0);
+        let (x3, y3) = CanvasModel::default_position(3);
+        assert_eq!(x0, NODE_START_X);
+        assert_eq!(x3, NODE_START_X, "misma columna");
+        assert!(y3 > y0, "el fallback avanza hacia abajo");
 
         let mut data = data(vec![step("a"), step("b")]);
         data.layout.insert(
@@ -876,9 +915,9 @@ mod tests {
     #[test]
     fn hit_testing_de_nodos() {
         let model = CanvasModel::build(&data(vec![step("a"), step("b")]));
-        // a: (80,120) 260x96; b: (410,120).
+        // a: (80,120) 260x96; b: (80,300) — fallback vertical.
         assert_eq!(model.node_at((100.0, 130.0)), Some(0));
-        assert_eq!(model.node_at((420.0, 140.0)), Some(1));
+        assert_eq!(model.node_at((100.0, 310.0)), Some(1));
         assert_eq!(model.node_at((0.0, 0.0)), None);
         // Checkbox de a: (93,136) 14x14.
         assert!(model.hit_checkbox(0, (95.0, 140.0)));
@@ -909,21 +948,26 @@ mod tests {
         let edge = model.dependency_edges().next().unwrap().clone();
 
         // Punto sobre el trazado (mitad del camino): zoom 1 golpea.
-        let mid = edge.sample(16)[8];
+        let points = edge.sample(40);
+        let mid = points[20];
+        let tangent = (points[21].0 - points[19].0, points[21].1 - points[19].1);
+        let length = tangent.0.hypot(tangent.1);
+        let normal = (-tangent.1 / length, tangent.0 / length);
         let mut transform = ViewTransform::default();
         assert!(model.hit_edge(transform.to_screen(mid), &transform).is_some());
 
         // 6px DESVIADO en pantalla → golpea (tolerancia 9).
-        let near = (mid.0, mid.1 + 6.0 / transform.zoom);
+        let near = (mid.0 + normal.0 * 6.0 / transform.zoom, mid.1 + normal.1 * 6.0 / transform.zoom);
         assert!(model.hit_edge(transform.to_screen(near), &transform).is_some());
 
         // Con zoom 0.5, 6px de mundo = 3px de pantalla → sigue golpeando…
         transform.zoom = 0.5;
         let offset_screen = 6.0;
-        let world = transform.to_world((transform.to_screen(mid).0, transform.to_screen(mid).1 + offset_screen));
+        let screen = transform.to_screen(mid);
+        let world = transform.to_world((screen.0 + normal.0 * offset_screen, screen.1 + normal.1 * offset_screen));
         assert!(model.hit_edge(transform.to_screen(world), &transform).is_some());
         // …pero 30px de pantalla NO (lejos de la tolerancia de 9).
-        let far = (transform.to_screen(mid).0, transform.to_screen(mid).1 + 30.0);
+        let far = (transform.to_screen(mid).0 + normal.0 * 30.0, transform.to_screen(mid).1 + normal.1 * 30.0);
         assert!(model.hit_edge(far, &transform).is_none());
     }
 
@@ -933,14 +977,64 @@ mod tests {
     fn hit_del_mango_de_conexion() {
         let model = CanvasModel::build(&data(vec![step("a")]));
         let node = &model.nodes[0];
-        let anchor = node.source_anchor();
+        let anchor = node.anchor(ConnectionSide::Right);
         let transform = ViewTransform::default();
         assert_eq!(
-            model.hit_handle(transform.to_screen(anchor), &transform),
-            Some(0)
+            model.hit_port(transform.to_screen(anchor), &transform),
+            Some((0, ConnectionSide::Right))
         );
         // 40px lejos en pantalla → fuera de tolerancia.
-        assert_eq!(model.hit_handle((anchor.0 + 40.0, anchor.1), &transform), None);
+        assert_eq!(model.hit_port((anchor.0 + 40.0, anchor.1), &transform), None);
+    }
+
+    #[test]
+    fn all_four_ports_share_screen_space_hit_tolerance_at_every_zoom() {
+        let model = CanvasModel::build(&data(vec![step("a")]));
+        for zoom in [ViewTransform::MIN_ZOOM, 1.0, ViewTransform::MAX_ZOOM] {
+            let transform = ViewTransform { zoom, pan_x: -37.0, pan_y: 55.0 };
+            for side in ConnectionSide::ALL {
+                let screen = transform.to_screen(model.nodes[0].anchor(side));
+                let normal = side.outward();
+                assert_eq!(model.hit_port(screen, &transform), Some((0, side)));
+                assert_eq!(model.hit_port((screen.0 + normal.0 * 11.0, screen.1 + normal.1 * 11.0), &transform), Some((0, side)));
+                assert_eq!(model.hit_port((screen.0 + normal.0 * 13.0, screen.1 + normal.1 * 13.0), &transform), None);
+            }
+        }
+    }
+
+    #[test]
+    fn nearby_vertical_ports_pick_the_nearest_card() {
+        let mut data = data(vec![step("a"), step("b")]);
+        data.layout.insert("b".into(), Position { x: 80.0, y: 226.0 });
+        let model = CanvasModel::build(&data);
+        let transform = ViewTransform { zoom: 0.5, ..ViewTransform::default() };
+        for (index, side) in [(0, ConnectionSide::Bottom), (1, ConnectionSide::Top)] {
+            let point = transform.to_screen(model.nodes[index].anchor(side));
+            assert_eq!(model.hit_port(point, &transform), Some((index, side)));
+        }
+    }
+
+    #[test]
+    fn links_route_through_facing_ports_in_both_axes_and_both_directions() {
+        for (position, from, to) in [
+            ((500.0, 120.0), ConnectionSide::Right, ConnectionSide::Left),
+            ((-400.0, 120.0), ConnectionSide::Left, ConnectionSide::Right),
+            ((80.0, 500.0), ConnectionSide::Bottom, ConnectionSide::Top),
+            ((80.0, -200.0), ConnectionSide::Top, ConnectionSide::Bottom),
+        ] {
+            let mut target = step("b");
+            target.dependencies.push("a".into());
+            let mut data = data(vec![step("a"), target]);
+            data.layout.insert("b".into(), Position { x: position.0, y: position.1 });
+            let model = CanvasModel::build(&data);
+            for edge in &model.edges {
+                assert_eq!(edge.from, model.nodes[0].anchor(from));
+                assert_eq!(edge.to, model.nodes[1].anchor(to));
+                let points = edge.sample(40);
+                assert!(!model.nodes[0].contains(points[1]), "link must leave the source card");
+                assert!(!model.nodes[1].contains(points[39]), "link must approach from outside the target");
+            }
+        }
     }
 
     /// Extremos de arista detectables para reconectar (solo dependencias).
@@ -967,7 +1061,7 @@ mod tests {
     }
 
     /// Geometría: la recta del order pasa por sus extremos y el curvo del
-    /// output se desvía hacia arriba (carril curvo).
+    /// output usa un carril curvo separado de la recta.
     #[test]
     fn geometria_de_aristas() {
         let mut a = step("a");
@@ -993,11 +1087,14 @@ mod tests {
         let data = data(vec![a, b]);
         let model = CanvasModel::build(&data);
         let order = model.edges.iter().find(|edge| edge.kind == EdgeKind::Order).unwrap();
-        assert_eq!(order.from, model.nodes[0].source_anchor());
-        assert_eq!(order.to, model.nodes[1].target_anchor());
+        assert_eq!(order.from, model.nodes[0].anchor(ConnectionSide::Bottom));
+        assert_eq!(order.to, model.nodes[1].anchor(ConnectionSide::Top));
         let output = model.edges.iter().find(|edge| edge.kind == EdgeKind::Output).unwrap();
-        // El carril curvo se eleva por encima de la línea recta.
-        assert!(output.control1.1 < output.from.1);
+        // A vertical flow uses a separate lane to the right of the order
+        // line and approaches both ports from outside the cards.
+        assert!(output.control1.0 > output.from.0);
+        assert!(output.control2.0 > output.to.0);
+        assert!(output.control1.1 > output.from.1);
         assert!(output.control2.1 < output.to.1);
         // El muestreo empieza/termina en los anclas.
         let points = output.sample(8);
@@ -1035,9 +1132,10 @@ mod tests {
         assert_eq!(model.nodes.len(), 2, "nodos del documento de diseño");
         assert_eq!(model.empty, None, "hay pasos: sin estado vacío");
         assert!(model.nodes[0].active == false && model.nodes[1].active);
-        // Layout del documento (80 / 410) sin ningún store de por medio.
-        assert_eq!(model.nodes[0].position, (80.0, NODE_START_Y));
-        assert_eq!(model.nodes[1].position, (410.0, NODE_START_Y));
+        // Layout del documento (misma columna, hacia abajo) sin store.
+        assert_eq!(model.nodes[0].position, (NODE_START_X, NODE_START_Y));
+        assert_eq!(model.nodes[1].position.0, NODE_START_X);
+        assert!(model.nodes[1].position.1 > model.nodes[0].position.1);
         assert!(!model.edges.is_empty(), "orden/deps clasificados");
     }
 

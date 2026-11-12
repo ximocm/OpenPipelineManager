@@ -111,10 +111,18 @@ impl PipelineLibrary {
     pub fn import_file(&self, path: &Path, name: &str) -> Result<PipelineDoc, StoreError> {
         let stem = library_stem(name)?;
         let text = fs::read_to_string(path).map_err(StoreError::Io)?;
-        let pipeline = parse_pipeline(&path.to_string_lossy(), &text)
-            .map_err(|err| StoreError::Message(err.to_string()))?;
-        let mut doc = PipelineDoc::new(&stem, pipeline);
-        doc.normalize_for_import();
+        let mut doc = if path.extension().and_then(|ext| ext.to_str()).is_some_and(|ext| ext.eq_ignore_ascii_case("pipeline")) {
+            let mut doc = PipelineDoc::from_json(&text, path)?;
+            doc.normalize();
+            doc
+        } else {
+            let pipeline = parse_pipeline(&path.to_string_lossy(), &text)
+                .map_err(|err| StoreError::Message(err.to_string()))?;
+            let mut doc = PipelineDoc::new(&stem, pipeline);
+            doc.normalize_for_import();
+            doc
+        };
+        doc.name = stem.clone();
         self.save(&stem, &doc, SaveMode::CreateNew)?;
         Ok(doc)
     }

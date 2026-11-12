@@ -451,6 +451,31 @@ fn first_run_example_runs_from_scratch_in_independent_work_folders() {
 
 // ------------------------------------------------------------- preflight
 
+#[cfg(unix)]
+#[test]
+fn imported_tool_step_executes_without_registry_and_keeps_values_as_single_arguments() {
+    let (parent, store, manager) = fixture("independent-tool");
+    let tool = opm_store::ToolDefinition::from_json(r#"{
+        "schema_version":1,"id":"print","version":"1","name":"Print",
+        "executable":"printf","inputs":{},
+        "parameters":{"message":{"type":"text","required":true}},
+        "outputs":{"result":{"type":"file","required":true}},
+        "arguments":["%s","{message}"],"stdout":"result"
+    }"#).unwrap();
+    let mut step = tool.instantiate("print_1", &tool.default_options()).unwrap();
+    let payload = "hello ' ; $(touch injected) & with spaces";
+    step.parameters[0].default = Some(Value::Str(payload.into()));
+    let output = step.outputs[0].path.clone();
+    store.create_step(step).unwrap();
+    manager.run_steps(vec!["print_1".into()]).unwrap();
+    collect_finished(&manager);
+    assert_eq!(store.state_of("print_1").status, StepStatus::Ok);
+    let root = store.project_root().unwrap();
+    assert_eq!(fs::read_to_string(root.join(output)).unwrap(), payload);
+    assert!(!root.join("injected").exists());
+    cleanup(&parent);
+}
+
 /// Unsafe working directory → validation blocker → `Blocked` BEFORE any
 /// thread/process starts (no marker file ever appears).
 #[test]

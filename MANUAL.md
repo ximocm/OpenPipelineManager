@@ -18,6 +18,18 @@ or run a built binary directly, for example `./target/release/opm`. Per-OS
 prerequisites are documented in `BUILDING.md`. On Windows, running pipelines
 additionally requires a POSIX shell (Git for Windows provides bash).
 
+Starting without arguments opens the start page. Choose **Open pipeline…**,
+**New pipeline…** or **Import pipeline…** for reusable designs, or **Open work
+folder…** / **New work…** for project execution. **Browse a folder…** opens the
+file explorer without requiring a pipeline. File editing remains available
+through **Open file…** and **New text file**.
+
+Recent work is offered as a button for explicit reopening while the existing
+one-hour session window is valid. A missing or invalid recent work folder is
+reported on the start page. Supplying a file or folder on the command line
+opens it directly. **Ctrl+W** closes the start window; **Ctrl+S** has nothing to
+save there.
+
 ## 3. Pipelines, Library, and Work Folders
 
 The application separates *designing* a pipeline from *running* it.
@@ -65,8 +77,9 @@ The left explorer supports creating files/folders, uploading files, renaming, de
 
 ## 4. Importing and Exporting Pipelines
 
-Use **Import pipeline** to turn an external `.yml`, `.yaml`, or `.json`
-definition into a named library document. Imports never silently overwrite: if
+Use **Import pipeline** to copy a native `.pipeline` document or turn an external
+`.yml`, `.yaml`, or `.json` definition into a named library document. Native imports
+preserve their graph and layout. Imports never silently overwrite: if
 the name already exists, the app asks. Use **Export pipeline** to share a
 pipeline as YAML or JSON — exporting is an explicit action and does not create
 a second configuration the app needs to operate.
@@ -83,6 +96,36 @@ steps:
 If no dependencies are defined, the app connects steps in their file order.
 
 ## 5. Editing Steps
+
+The workspace keeps tools or project files on the left, the pipeline canvas
+in the center, and the step inspector on the right. Drag the dividers to
+resize panes; the arrow in the Tools header collapses that pane. Small windows
+and large text use scrollbars to keep controls reachable.
+
+On the canvas, drag empty space to pan and use **Ctrl+scroll** or **+ / −**
+to zoom. **Fit** (or **Home**) brings the pipeline into view without moving
+its saved nodes. **Left / Right** selects steps and **Space** toggles the
+selected step's run checkbox. **Alt+arrows** pans with the keyboard. The
+information button beside Fit explains the controls and the three link types.
+Each card has top, bottom, left and right connection ports. Drag from any port
+to another step to add a dependency. Links choose facing ports from the nodes'
+positions, supporting vertical and horizontal layouts without an orientation
+setting. Select a dependency before dragging its destination port to reconnect
+it. These gestures edit dependencies only in Design.
+The selected step's command is selectable and wraps in the inspector.
+
+Reusable tool definitions and ready-to-use pipelines are published in the
+[OPM Registry](https://github.com/ximocm/opm-registry). Open **Pipeline >
+Marketplace…** to browse and add definitions, or use **Import tool JSON…** to
+install a local tool file. In Design, choose a tool from the **Tools** palette,
+select optional arguments and input counts, then click empty canvas repeatedly
+to place steps. Press **Esc** on the canvas or **Selection tool** to stop.
+
+Each placed step has its own ID and outputs and is edited and saved like any
+other step. Installing a definition does not install its external program or
+change existing pipelines. See [Tools and Marketplace](docs/TOOLS.md) and the
+[registry documentation](https://github.com/ximocm/opm-registry#readme) for
+installation requirements, independent tool use, and example pipelines.
 
 Structural editing belongs to the Design window: select a step and use the
 edit button to create or change steps. A work window shows the same step
@@ -156,7 +199,7 @@ outputs:
     path: work/normalized/data.csv
 ```
 
-The canvas draws three link types: straight gray lines for pipeline order, dashed teal lines for output-to-input links, and solid lines for explicit dependencies (selectable; Delete removes the dependency).
+The canvas uses continuous lines for all three link types: thin gray lines with chevrons for pipeline order, teal lines with open arrowheads for output-to-input links, and purple lines with filled arrowheads for explicit dependencies (selectable; Delete removes the dependency).
 
 ## 8. Options and Selectors
 
@@ -193,6 +236,10 @@ Validation checks whether the pipeline is internally consistent before execution
 Blockers should be fixed before running. Warnings indicate incomplete or risky configuration.
 
 ## 10. Running Pipelines
+
+The log header offers **Follow** to keep new output in view and **Wrap** to
+read long lines. Turn Follow off while reading earlier output. These controls
+affect the display only; log files and pipeline commands are unchanged.
 
 Running happens in a work window. Use **Run selected** to run selected steps. If no steps are selected, the app runs pending steps in dependency order. Use each step card or the right panel to run one step. Input selections and option values are per work folder: the same library pipeline can run in several work folders without sharing values, logs, outputs, or completion state.
 

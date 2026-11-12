@@ -22,6 +22,7 @@ pub struct LogsPanel {
     view: gtk::TextView,
     buffer: gtk::TextBuffer,
     end: gtk::TextMark,
+    follow: gtk::CheckButton,
     /// El buffer muestra el placeholder «No log output» (sin contenido real).
     placeholder: Cell<bool>,
     selected: RefCell<Option<String>>,
@@ -45,6 +46,14 @@ impl LogsPanel {
         title.set_hexpand(true);
         title.set_xalign(0.0);
         title.add_css_class("opm-logs-title");
+        title.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
+        let follow = gtk::CheckButton::with_label("Follow");
+        follow.set_active(true);
+        follow.set_tooltip_text(Some(
+            "Scroll to new output. Turn off to read earlier lines.",
+        ));
+        let wrap = gtk::CheckButton::with_label("Wrap");
+        wrap.set_tooltip_text(Some("Wrap long output lines"));
         let stop = gtk::Button::with_label("Stop");
         stop.set_tooltip_text(Some("Stop execution"));
         stop.add_css_class("opm-stop-button");
@@ -53,6 +62,8 @@ impl LogsPanel {
             stop.connect_clicked(move |_| on_stop());
         }
         header.append(&title);
+        header.append(&follow);
+        header.append(&wrap);
         header.append(&stop);
         root.append(&header);
 
@@ -60,11 +71,22 @@ impl LogsPanel {
         view.set_editable(false);
         view.set_cursor_visible(false);
         view.set_monospace(true);
+        view.update_property(&[gtk::accessible::Property::Label("Step execution output")]);
         view.set_wrap_mode(gtk::WrapMode::None);
-        view.set_left_margin(8);
-        view.set_right_margin(8);
-        view.set_top_margin(6);
-        view.set_bottom_margin(6);
+        view.set_left_margin(16);
+        view.set_right_margin(16);
+        view.set_top_margin(12);
+        view.set_bottom_margin(12);
+        wrap.connect_toggled({
+            let view = view.clone();
+            move |wrap| {
+                view.set_wrap_mode(if wrap.is_active() {
+                    gtk::WrapMode::WordChar
+                } else {
+                    gtk::WrapMode::None
+                })
+            }
+        });
         let buffer = view.buffer();
         let end = buffer.create_mark(None, &buffer.end_iter(), false);
         let placeholder_tag = gtk::TextTag::new(Some("opm-placeholder"));
@@ -87,8 +109,19 @@ impl LogsPanel {
             view,
             buffer,
             end,
+            follow,
             placeholder: Cell::new(true),
             selected: RefCell::new(None),
+        });
+        panel.follow.connect_toggled({
+            let weak = Rc::downgrade(&panel);
+            move |follow| {
+                if follow.is_active() {
+                    if let Some(panel) = weak.upgrade() {
+                        panel.scroll_end();
+                    }
+                }
+            }
         });
         panel.set_placeholder();
         panel
@@ -96,6 +129,12 @@ impl LogsPanel {
 
     pub fn widget(&self) -> gtk::Widget {
         self.root.clone().upcast()
+    }
+
+    pub fn set_palette(&self, palette: &Palette) {
+        if let Some(tag) = self.buffer.tag_table().lookup("opm-placeholder") {
+            tag.set_foreground(Some(palette.muted));
+        }
     }
 
     /// Botón Stop (§6: siempre visible; su sensibilidad la fija `main.rs`).
@@ -113,9 +152,10 @@ impl LogsPanel {
     pub fn show_step(&self, step_id: Option<&str>, content: &str) {
         *self.selected.borrow_mut() = step_id.map(str::to_owned);
         match step_id {
-            Some(id) => self.title.set_text(&format!("Logs: {id}")),
+            Some(id) => self.title.set_text(&format!("Logs · {id}")),
             None => self.title.set_text("Logs"),
         }
+        self.title.set_tooltip_text(step_id);
         self.set_content(content);
     }
 
@@ -165,7 +205,9 @@ impl LogsPanel {
     }
 
     fn scroll_end(&self) {
-        self.view.scroll_to_mark(&self.end, 0.0, false, 0.0, 1.0);
+        if self.follow.is_active() {
+            self.view.scroll_to_mark(&self.end, 0.0, false, 0.0, 1.0);
+        }
     }
 }
 

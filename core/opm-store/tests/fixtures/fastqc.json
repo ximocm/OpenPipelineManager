@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "id": "fastqc",
+  "version": "0.1.0",
+  "name": "FastQC",
+  "description": "Quality reports for one or more FASTQ files. Requires Java and FastQC on PATH.",
+  "executable": "fastqc",
+  "homepage": "https://www.bioinformatics.babraham.ac.uk/projects/fastqc/",
+  "version_arguments": [
+    "--version"
+  ],
+  "inputs": {
+    "reads": {
+      "type": "file",
+      "description": "FASTQ input files, plain or compressed.",
+      "required": true,
+      "multiple": true
+    }
+  },
+  "parameters": {
+    "threads": {
+      "type": "integer",
+      "description": "Number of worker threads.",
+      "required": false,
+      "min": 1,
+      "max": 64,
+      "default": 1
+    }
+  },
+  "outputs": {
+    "outdir": {
+      "type": "folder",
+      "description": "Directory for HTML/ZIP reports.",
+      "required": true
+    }
+  },
+  "arguments": [
+    "--threads",
+    "{threads}",
+    "--outdir",
+    "{outdir}",
+    "{reads}"
+  ],
+  "tested_software_version": "0.13.0"
+}

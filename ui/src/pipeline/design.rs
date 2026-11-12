@@ -38,6 +38,19 @@ pub struct DesignState {
 }
 
 impl DesignState {
+    /// Paint a self-contained tool step. Errors leave the document unchanged.
+    pub fn place_tool(&mut self, tool: &opm_store::ToolDefinition, options: &opm_store::ToolOptions, x: f64, y: f64) -> Result<String, StoreError> {
+        if !x.is_finite() || !y.is_finite() { return Err(StoreError::Message("Invalid canvas position".into())); }
+        let base = safe_segment(&tool.id.replace('-', "_"));
+        let id = (1..=self.doc.pipeline.steps.len() + 1)
+            .map(|n| format!("{base}_{n}"))
+            .find(|id| self.doc.pipeline.steps.iter().all(|s| &s.id != id)).unwrap();
+        let step = tool.instantiate(&id, options)?;
+        self.create_step(step)?;
+        self.set_layout(&id, x, y);
+        Ok(id)
+    }
+
     /// Diseño nuevo y vacío con `name` (sin guardar en la librería).
     pub fn new(name: &str) -> Self {
         Self {
@@ -469,11 +482,11 @@ fn normalized_step(step: &PipelineStep, step_id: &str, dependencies: &[String]) 
 }
 
 /// Posición por defecto del paso `index` (mismas constantes que el core:
-/// `x=80+i·330, y=120`).
+/// `x=80, y=120+i·180`, flujo de arriba a abajo).
 fn default_step_position(index: usize) -> Position {
     Position {
-        x: 80.0 + index as f64 * 330.0,
-        y: 120.0,
+        x: 80.0,
+        y: 120.0 + index as f64 * 180.0,
     }
 }
 
@@ -550,10 +563,13 @@ mod tests {
         );
         // s2 hereda la dependencia por defecto sobre el último paso.
         assert_eq!(pipeline.steps[1].dependencies, vec!["s1".to_owned()]);
-        // Layout sembrado con la posición por defecto de cada paso
-        // (x = 80 + i·330, mismas constantes que el core).
-        assert_eq!(snapshot.visual_layout["s1"].x, 80.0);
-        assert_eq!(snapshot.visual_layout["s2"].x, 410.0);
+        // Layout sembrado con la posición por defecto de cada paso: misma
+        // columna, avanzando hacia abajo (mismas constantes que el core).
+        assert_eq!(
+            snapshot.visual_layout["s2"].x,
+            snapshot.visual_layout["s1"].x
+        );
+        assert!(snapshot.visual_layout["s2"].y > snapshot.visual_layout["s1"].y);
         // Selección de vista en el paso conmutado (estados perezosos: los
         // no conmutados ni siquiera tienen entrada).
         assert!(snapshot.state.get("s1").is_some_and(|state| state.selected));
@@ -862,5 +878,28 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn painting_tools_is_dirty_and_preserves_positions_and_independent_outputs() {
+        let tool = opm_store::ToolDefinition::from_json(include_str!("../../../core/opm-store/tests/fixtures/fastqc.json")).unwrap();
+        let mut design = DesignState::new("painted");
+        let options = tool.default_options();
+        let first = design.place_tool(&tool, &options, 12.0, -30.0).unwrap();
+        let second = design.place_tool(&tool, &options, 400.0, 100.0).unwrap();
+        assert_ne!(first, second);
+        assert!(design.dirty());
+        assert_eq!(design.doc().layout[&first], opm_store::Position { x: 12.0, y: -30.0 });
+        assert_ne!(design.step(&first).unwrap().outputs, design.step(&second).unwrap().outputs);
+        let saved = design.document_for_save("painted");
+        assert_eq!(saved.pipeline.steps.len(), 2);
+        assert!(saved.pipeline.steps.iter().all(|s| s.command.contains("fastqc")));
+        assert!(design.place_tool(&tool, &options, f64::NAN, 0.0).is_err());
+        assert_eq!(design.steps().len(), 2);
+        let mut alternate = tool;
+        alternate.id = "custom__tool".into();
+        let id = design.place_tool(&alternate, &options, 800.0, 80.0).unwrap();
+        assert_eq!(id, "custom_tool_1");
+        assert!(design.step(&id).is_some());
     }
 }

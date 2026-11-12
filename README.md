@@ -1,188 +1,207 @@
-<h1 align="center">Open Pipeline Manager</h1>
+<div align="center">
 
-<p align="center">
-  A local-first visual workbench for configuring, validating, and running declarative pipelines.
-</p>
+# Open Pipeline Manager
 
-<p align="center">
-  <img alt="Rust" src="https://img.shields.io/badge/Rust-stable-000000">
-  <img alt="GTK4" src="https://img.shields.io/badge/GTK4-native%20desktop-76548F">
-  <img alt="License" src="https://img.shields.io/badge/License-Attribution%20Non--Commercial-blue">
-</p>
+**From commands to connected workflows.**
 
-Open Pipeline Manager helps you turn shell-based workflows into visible, editable pipeline projects. It is a native desktop application built on the [minmark](https://github.com/ximocm/minmark) stack: a Rust core workspace plus a GTK4 user interface that embeds minmark's editor (cloned and adapted). It provides a VS Code-style project explorer, a connected step canvas, structured inputs/options/outputs, validation, execution controls, and live logs while keeping all runtime state inside the opened project folder.
+A native desktop workbench for designing, validating, and running local pipelines.
 
-## Contents
+[![Version](https://img.shields.io/badge/version-0.3.0-1565c0?style=flat-square)](CHANGELOG.md)
+[![Rust](https://img.shields.io/badge/Rust-stable-000000?style=flat-square&logo=rust)](BUILDING.md)
+[![GTK4](https://img.shields.io/badge/GTK4-native_desktop-76548f?style=flat-square)](docs/UI_DESIGN.md)
+[![CI](https://github.com/ximocm/OpenPipelineManager/actions/workflows/ci.yml/badge.svg)](https://github.com/ximocm/OpenPipelineManager/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-Attribution_Non--Commercial-57606a?style=flat-square)](LICENSE)
 
-- [Features](#features)
-- [Quick Start](#quick-start)
-- [How It Works](#how-it-works)
-- [Pipeline Example](#pipeline-example)
-- [Validation](#validation)
-- [Project Structure](#project-structure)
-- [Development](#development)
-- [Documentation](#documentation)
-- [Versioning](#versioning)
-- [License](#license)
+**Linux · Windows · macOS**
 
-## Features
+[Downloads](https://github.com/ximocm/OpenPipelineManager/releases) · [Quick start](#quick-start) · [Manual](MANUAL.md) · [Tool registry](https://github.com/ximocm/opm-registry)
 
-- Visual pipeline canvas with ordered step links, output-to-input links, and editable dependency links.
-- Project explorer with create, upload, rename, delete, drag-and-drop move, a Refresh action, and file tabs, including safeguards against silent overwrites and unsaved-edit loss.
-- Text editor cloned from minmark: tabbed documents with dirty-state guards, find/replace, markdown editing with Visual Mode, and syntax highlighting for YAML, JSON, shell, and FASTA files; image files open in a viewer.
-- Step editor for command, environment, working directory, inputs, outputs, and options; dependencies are edited directly on the canvas.
-- Pipeline variable insertion, for example `INPUT_FILE={input_file}`.
-- Selector options with predefined values.
-- Runtime validation before execution.
-- Local command execution with per-step logs, status, and `.done` markers.
-- Session restore for the last opened project.
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/workspace-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="docs/screenshots/workspace-light.png">
+  <img src="docs/screenshots/workspace-dark.png" alt="Open Pipeline Manager running a completed four-step sequence-analysis workflow, with connected cards, project files, step inspector and real execution logs" width="1440">
+</picture>
 
-## Quick Start
+<sub>A complete workflow, its files, configuration, and execution history in one workspace.</sub>
 
-Prerequisites: a Rust stable toolchain and GTK 4.10 development files. See [BUILDING.md](BUILDING.md) for per-OS instructions (Linux, Windows, macOS).
+</div>
+
+---
+
+Turn shell-based workflows into visible, reusable pipeline documents. Connect steps on a canvas, declare their inputs and outputs, check validation, then run them against a work folder on your machine.
+
+Open Pipeline Manager is built with **Rust, GTK4, and Cairo**. The native application keeps pipeline definitions separate from execution projects, with local files, explicit saves, and per-step logs.
+
+## One workspace, from design to results
+
+| Design | Validate | Run & inspect |
+| --- | --- | --- |
+| Arrange steps vertically or horizontally. Connect any of a card's four ports and configure commands, inputs, options, and outputs. | Catch missing inputs, invalid values, broken links, dependency cycles, and unsafe project paths before execution. | Run selected or pending steps in dependency order. Follow logs, inspect outputs, and return to the saved work later. |
+
+- **Reusable tools.** Browse the Marketplace, import tool JSON, and place configured tool instances with the canvas brush.
+- **Files alongside the graph.** Explore project folders, open document tabs, edit Markdown in source or Visual Mode, and inspect YAML, JSON, shell, FASTA, and image files.
+- **Native controls.** Resizable panes, light/dark themes, keyboard navigation, pan, zoom, and Fit keep the workspace usable across different layouts.
+- **Explicit changes.** Dirty-document guards, upload conflict checks, native file dialogs, and validation protect the editing and execution flow.
+
+## Start with your work
+
+Open a reusable pipeline, create a new design, or choose a work folder to continue an analysis. The start page also offers recent work and ordinary file editing. Explicit file and folder arguments open directly.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/welcome-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="docs/screenshots/welcome-light.png">
+  <img src="docs/screenshots/welcome-light.png" alt="Native start page with pipeline design, work-folder actions, and a recent project" width="1040">
+</picture>
+
+## A closer look
+
+Click a screenshot to see it at full size.
+
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <strong>Design connected workflows</strong><br><br>
+      <a href="docs/screenshots/design-light.png"><img src="docs/screenshots/design-light.png" alt="Pipeline Design with a reusable tool palette, four connected steps, and the selected step's configuration"></a>
+      <p>Reusable tool definitions, four connection ports, and continuous links that adapt to your layout.</p>
+    </td>
+    <td width="50%" valign="top">
+      <strong>Configure typed inputs and options</strong><br><br>
+      <a href="docs/screenshots/configure-light.png"><img src="docs/screenshots/configure-light.png" alt="Step configuration showing a file input, required values, and a bounded integer parameter"></a>
+      <p>Named inputs and outputs, required fields, defaults, ranges, selectors, and command placeholders.</p>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <strong>Keep notes and results together</strong><br><br>
+      <a href="docs/screenshots/editor-dark.png"><img src="docs/screenshots/editor-dark.png" alt="The built-in Markdown Visual Mode displaying analysis notes alongside project files and step details"></a>
+      <p>Tabbed editing, Markdown Visual Mode, syntax highlighting, and direct access to generated files.</p>
+    </td>
+    <td width="50%" valign="top">
+      <strong>Add reusable tools and pipelines</strong><br><br>
+      <a href="docs/screenshots/marketplace-light.png"><img src="docs/screenshots/marketplace-light.png" alt="The live OPM Registry catalog in the native Marketplace, with reusable tools and pipelines"></a>
+      <p>Browse the public registry or import local definitions. External programs are supplied by your execution environment.</p>
+    </td>
+  </tr>
+</table>
+
+<details>
+<summary>About these screenshots</summary>
+
+These are actual GTK application captures on Linux, using isolated demo projects. The four-step sequence-analysis demo runs with a POSIX shell, `awk`, and `cat`; its report contains **4 retained reads and 46 bases**. The Marketplace image shows the real public registry. FastQC and Cutadapt definitions are installed in the isolated demo library; those external programs are not run by the screenshot demo.
+
+See the [screenshot guide](docs/screenshots/README.md) for the fixture, additional images, and reproduction commands.
+
+</details>
+
+## Quick start
+
+Find packaged builds on the [releases page](https://github.com/ximocm/OpenPipelineManager/releases), or build from source.
+
+You need a **Rust stable toolchain** and **GTK 4.10+ development files**. See [BUILDING.md](BUILDING.md) for Linux, Windows, and macOS prerequisites.
 
 ```bash
 cargo build --locked --release --manifest-path ui/Cargo.toml
 ./target/release/opm
 ```
 
-For development builds:
+For development, or to open a folder directly:
 
 ```bash
 cargo run --locked --manifest-path ui/Cargo.toml
+cargo run --locked --manifest-path ui/Cargo.toml -- path/to/project
 ```
 
-## How It Works
+### Run your first pipeline
 
-1. Design a pipeline (New pipeline) or open one from the application library.
-2. Save it as a named `.pipeline` document, or import a `pipeline.yml`, `pipeline.yaml`, or `pipeline.json`.
-3. Edit steps on the canvas or in the right-side panel.
-4. Define inputs, outputs, options, and previous-output links.
-5. Fix validation blockers.
-6. Run selected steps or run the pending pipeline.
+1. Choose **Import pipeline…** on the start page and select [`examples/first-run.json`](examples/first-run.json).
+2. Save the pipeline, then choose **New work…** and select an empty work folder.
+3. Review validation and run the pending steps.
 
-Runtime files are written to the opened work folder under `.pipeline-manager/`, not to this source repository.
-
-## Pipeline Example
-
-Import [`examples/first-run.json`](examples/first-run.json) into a fresh work
-folder. This single example generates a message in `Input/message.txt`, then
-passes it to a dependent step that writes `outputs/report.txt`. You can change
-the message and choose a report mode without external scripts or downloads.
-
-With default values, the report contains:
+The example generates an input message and a dependent report without downloads or external scripts:
 
 ```text
 Hello from Open Pipeline Manager
 mode=demo
 ```
 
-Follow the [fresh work folder walkthrough](examples/README.md) to create and run
-the example. It uses the JSON import format; pipelines are then saved as named
-`.pipeline` documents in the application library (see
-[the storage design](docs/PIPELINE_STORAGE.md)).
+Follow the [fresh work folder walkthrough](examples/README.md) for the complete sequence.
 
-## Validation
+## Pipeline documents and work folders
 
-Validation checks for:
-
-- duplicate step IDs,
-- missing dependencies and dependency cycles,
-- unsafe working directories, inputs, or outputs that resolve outside the opened project,
-- empty or duplicate input, parameter, and keyed-output names,
-- empty output paths,
-- missing required inputs,
-- file/folder inputs that do not exist,
-- command placeholders without matching inputs/options/outputs,
-- missing placeholder values,
-- invalid or non-finite numeric values and inverted bounds,
-- non-boolean values assigned to boolean fields,
-- selector values outside predefined options,
-- invalid `source_step` or `source_output` links.
-
-Blockers should be fixed before running. Warnings indicate incomplete or risky configuration.
-
-## Project Structure
-
-Source layout (a Rust `core/` workspace plus a GTK4 `ui/` package, mirroring the minmark stack):
-
-```text
-core/
-  opm-document/   text buffer, undo/redo, search model (cloned from minmark)
-  opm-parser/     markdown parsing and highlighting (cloned from minmark)
-  opm-theme/      color palette (vendored from minmark)
-  opm-fs/         file store, atomic writes, project tree and file operations
-  opm-pipeline/   pipeline model, YAML/JSON parsing, validation
-  opm-exec/       execution engine with logs, statuses, and .done markers
-  opm-store/      pipeline library and work-folder persistence
-ui/
-  src/            GTK4 application: editor, tabs, explorer, canvas, step panel,
-                  run controls, logs (bin: opm)
-scripts/          multi-OS packaging and release validation
-docs/             CI, publishing, and architecture decision records
-examples/         sample pipeline definitions
-```
-
-Work folders use this structure:
+**Design** edits a reusable, named `.pipeline` document in the application library. YAML and JSON remain import/export formats. **Work** runs a snapshot of that definition with project-specific files, values, logs, and completion state.
 
 ```text
 WorkFolder/
-  Input/
-  steps/
-  outputs/
-  .pipeline-manager/
-    run.json
-    logs/
-    done/
+├── Input/                 # Input files
+├── steps/                 # Step working directories
+├── outputs/               # Generated results
+└── .pipeline-manager/
+    ├── run.json           # Definition snapshot, values, and step states
+    ├── logs/              # Per-step execution logs
+    └── done/              # Completion markers
 ```
 
-Reusable pipelines live separately in the application library as named
-`.pipeline` documents.
+Editing a library pipeline does not silently change existing work. Adopt a revision explicitly with **Update from library**. The [storage guide](docs/PIPELINE_STORAGE.md) documents the native format and library location.
+
+### Canvas controls
+
+| Action | Interaction |
+| --- | --- |
+| Select a step | Click a card, or use **Left / Right** |
+| Toggle its run checkbox | Click the checkbox, or press **Space** |
+| Pan | Drag the background, or use **Alt+arrows** |
+| Zoom / fit | **Ctrl+scroll**, **+ / −**, or **Home / Fit** |
+| Add a dependency | Drag from any connection port to another step in Design |
+| Reconnect / remove | Select a dependency, then drag its destination port or press **Delete** |
+| Leave the tool brush | **Escape** |
+| Save | **Ctrl+S**, according to the visible document |
+
+## Validation and execution
+
+Validation covers graph integrity, declared placeholders, required inputs, numeric ranges, boolean types, selector choices, linked outputs, and project-tree safeguards. Blockers prevent execution; warnings remain visible for review.
+
+Commands execute locally in dependency order. A step is considered complete when its `.done` marker and declared outputs exist. Logs remain in the work folder and can be followed or wrapped in the native console.
+
+**Pipeline commands are local code execution.** Review imported definitions before running them. On Windows, execution requires a POSIX shell such as Git for Windows' Bash. See the [manual](MANUAL.md) for configuration and documented limitations.
 
 ## Development
 
-Core tests:
+Run all required checks from the repository root:
 
 ```bash
 cargo test --locked --manifest-path core/Cargo.toml --workspace
-```
-
-UI tests and build:
-
-```bash
 cargo test --locked --manifest-path ui/Cargo.toml
 cargo build --locked --release --manifest-path ui/Cargo.toml
-```
-
-Release policy checks:
-
-```bash
 python3 scripts/test_release.py
 ```
 
+The version is **0.3.0**, tracked together in the core and UI Cargo manifests and lockfiles. Release tags must match both manifests. Changes are recorded in [CHANGELOG.md](CHANGELOG.md).
+
+| Directory | Responsibility |
+| --- | --- |
+| [`core/`](core/) | Document model, parsing, themes, files, pipeline validation, execution, and persistence |
+| [`ui/src/`](ui/src/) | Native GTK4 application, Cairo canvas, editor, inspector, Marketplace, and logs |
+| [`scripts/`](scripts/) | Release validation, packaging, and reproducible screenshot capture |
+| [`examples/`](examples/) | Self-contained first-run pipeline and walkthrough |
+| [`docs/`](docs/) | Architecture, storage, building, publishing, design, and QA |
+
+Bug reports and improvements are welcome through [issues](https://github.com/ximocm/OpenPipelineManager/issues). Pull requests target **`dev`** and should include the required checks. See [GITGUIDELINES.md](GITGUIDELINES.md).
+
 ## Documentation
 
-- [Manual](MANUAL.md): full usage guide, pipeline authoring, validation, and troubleshooting.
-- [Building](BUILDING.md): per-OS prerequisites, build, run, and local packaging.
-- [CI](docs/CI.md): CI/release workflows and how to cut a release.
-- [Publishing](docs/PUBLISHING.md): packaged artifacts and maintainer notes.
-- [Pipeline storage design](docs/PIPELINE_STORAGE.md): pipeline library and consolidated work persistence (implemented; see `DECISIONS.md`).
-- [Manual QA suite](docs/qa/README.md): manual test cases and execution records for the desktop application.
-- [Example](examples/README.md): one self-contained JSON pipeline and a fresh-work walkthrough.
-- [Git Guidelines](GITGUIDELINES.md): branch, test, changelog, release, and repository protection policy.
-- [Changelog](CHANGELOG.md): notable changes by version.
-- [Security Policy](SECURITY.md): supported versions and vulnerability reporting guidance.
+| Guide | Contents |
+| --- | --- |
+| [Manual](MANUAL.md) | Pipeline authoring, execution, editing, and troubleshooting |
+| [Tools & Marketplace](docs/TOOLS.md) | Import definitions, browse the registry, and paint steps |
+| [Build instructions](BUILDING.md) | Platform prerequisites and local builds |
+| [CI](docs/CI.md) · [Publishing](docs/PUBLISHING.md) | Build matrix, packages, tags, and releases |
+| [Storage](docs/PIPELINE_STORAGE.md) · [Decisions](DECISIONS.md) | Native documents, work snapshots, and architecture |
+| [UI design](docs/UI_DESIGN.md) · [Visual QA](docs/qa/workspace.md) | Design system, screenshots, and verification limits |
+| [Screenshot guide](docs/screenshots/README.md) | Gallery sources and capture workflow |
+| [Security](SECURITY.md) | Vulnerability reporting and supported versions |
 
-## Versioning
+## License and attribution
 
-The project version is tracked in the Cargo manifests: `core/Cargo.toml` (`workspace.package.version`) and `ui/Cargo.toml` (`package.version`), which must match. User-visible releases should update both manifests and `CHANGELOG.md`; `scripts/validate-release.py` enforces the pairing against the release tag.
+Open Pipeline Manager uses the custom [Attribution Non-Commercial License](LICENSE). Non-commercial use is permitted with attribution; commercial use requires explicit permission from the copyright holder.
 
-## Security
-
-Pipeline commands execute locally. Only import and run pipeline files you trust. Do not commit secrets, `.env` files, local project runtime state, or machine-specific absolute paths.
-
-## License
-
-Open Pipeline Manager is distributed under the custom [Attribution Non-Commercial License](LICENSE). Non-commercial use is permitted with attribution. Commercial use requires explicit permission from the copyright holder.
-
-Portions of the editor and core are cloned and adapted from [minmark](https://github.com/ximocm/minmark), © ximocm, licensed under Apache-2.0 (see [NOTICE](NOTICE) and `third-party/minmark-Apache-2.0.txt`). Third-party dependency notices are tracked in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+The editor and parts of the core are cloned and adapted from [minmark](https://github.com/ximocm/minmark), © ximocm, under Apache-2.0. See [NOTICE](NOTICE), the [minmark license](third-party/minmark-Apache-2.0.txt), and [third-party notices](THIRD_PARTY_NOTICES.md).

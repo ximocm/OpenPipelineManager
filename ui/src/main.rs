@@ -34,6 +34,7 @@ mod explorer;
 mod find;
 mod imageview;
 mod list_scroll;
+mod marketplace;
 mod menus;
 mod paths;
 mod pipeline;
@@ -42,6 +43,11 @@ mod runs;
 mod syntax;
 mod tabs;
 mod theme;
+mod welcome;
+#[cfg(test)]
+mod workspace_qa;
+#[cfg(test)]
+mod readme_capture;
 
 use editor::{EditSink, EditorPane, EditMode};
 use explorer::{
@@ -110,6 +116,7 @@ impl EditSink for Sink {
 /// su propia página (nunca en `TabManager`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum CenterView {
+    Welcome,
     Pipeline,
     Editor,
     Image(PathBuf),
@@ -144,6 +151,8 @@ struct AppCmds {
     design: Option<RefCell<DesignState>>,
     /// Etiqueta del toolbar de diseño (`<nombre>.pipeline · librería`).
     design_label: Option<gtk4::Label>,
+    tool_palette: Option<Rc<marketplace::ToolPalette>>,
+    tool_brush: RefCell<Option<(opm_store::ToolDefinition, opm_store::ToolOptions)>>,
     /// Motor de ejecución de esta ventana (§4 opm-exec, A6: `Arc` store).
     exec: Rc<ExecutionManager>,
     /// Reducer puro de los eventos del motor (§11 A12: tick de 250 ms).
@@ -306,6 +315,9 @@ impl AppCmds {
     /// Abre la barra de búsqueda (§39: `Ctrl+F`) o de reemplazo (`Ctrl+H`)
     /// sobre el tab activo y busca desde el cursor.
     fn find_open(&self, show_replace: bool) {
+        if *self.center_view.borrow() == CenterView::Welcome {
+            self.show_view(CenterView::Editor);
+        }
         self.find_bar.open(show_replace);
         let cursor = self.tabs.borrow().active().editor.selection().head;
         self.find_refresh(Some(cursor), true);
@@ -366,6 +378,10 @@ impl AppCmds {
     /// + modo Visual cuando el tab activo lo usa. En diseño el ámbito es el
     /// documento de librería (`<nombre>.pipeline`).
     fn update_title(&self) {
+        if *self.center_view.borrow() == CenterView::Welcome {
+            self.window.set_title(Some("Open Pipeline Manager"));
+            return;
+        }
         let (title, mode) = {
             let tabs = self.tabs.borrow();
             let index = tabs.active_index();
@@ -1039,9 +1055,46 @@ impl AppCmds {
 
     // --- Flujos de diseño (librería `.pipeline`, sin carpeta) ---------------
 
+    fn clear_tool_brush(&self) {
+        *self.tool_brush.borrow_mut() = None;
+        if let Some(canvas) = &self.canvas { canvas.set_brush_active(false); }
+        if let Some(palette) = &self.tool_palette { palette.set_brush(None); }
+    }
+
+    fn choose_tool(&self, tool: opm_store::ToolDefinition) {
+        let Some(me) = self.slot() else { return };
+        let slot = self.slot.clone();
+        marketplace::configure(&me.window, tool, Rc::new(move |tool, options| {
+            let Some(me) = slot.borrow().as_ref().and_then(Weak::upgrade) else { return };
+            let target = if me.scope.is_design() { me } else {
+                build_window(&me.app, WindowScope::Design, &[])
+            };
+            if let Err(err) = tool.instantiate("preview", &options) {
+                show_error(&target.window, &err.to_string()); return;
+            }
+            if let Some(palette) = &target.tool_palette { palette.set_brush(Some(&tool.name)); }
+            *target.tool_brush.borrow_mut() = Some((tool, options));
+            target.show_view(CenterView::Pipeline);
+            if let Some(canvas) = &target.canvas { canvas.set_brush_active(true); canvas.widget().grab_focus(); }
+        }));
+    }
+
+    fn paint_tool(&self, x: f64, y: f64) {
+        if !self.scope.is_design() || self.running.get() { return; }
+        let brush = self.tool_brush.borrow().clone();
+        let Some((tool, options)) = brush else { return };
+        let Some(design) = self.design() else { return };
+        let result = design.borrow_mut().place_tool(&tool, &options, x, y);
+        match result {
+            Ok(id) => { self.refresh_domain(); self.select_step(Some(id)); self.update_title(); }
+            Err(err) => show_error(&self.window, &err.to_string()),
+        }
+    }
+
     /// Sustituye el documento de diseño de ESTA ventana (requiere scope
     /// Design) y refresca todas las vistas.
     fn set_design(&self, doc: PipelineDoc, saved_name: Option<String>) {
+        self.clear_tool_brush();
         let Some(design) = self.design() else {
             return;
         };
@@ -1209,7 +1262,7 @@ impl AppCmds {
                 Err(StoreError::NameExists(_)) => {
                     match dialogs::confirm_name_conflict(&window, &stem).await {
                         dialogs::NameConflict::Overwrite => {
-                            let doc =
+                            let mut doc =
                                 match pipeline::design::definition_from_file(&file, &stem) {
                                     Ok(doc) => doc,
                                     Err(err) => {
@@ -1217,6 +1270,7 @@ impl AppCmds {
                                         return;
                                     }
                                 };
+                            doc.name = stem.clone();
                             match library.save(&stem, &doc, SaveMode::Overwrite) {
                                 Ok(()) => me.show_imported(doc, stem),
                                 Err(err) => show_error(&window, &err.to_string()),
@@ -1315,6 +1369,7 @@ impl AppCmds {
     /// Clave de página del stack para cada tipo de vista.
     fn page_name(view: &CenterView) -> String {
         match view {
+            CenterView::Welcome => "welcome".to_owned(),
             CenterView::Pipeline => "pipeline".to_owned(),
             CenterView::Editor => "editor".to_owned(),
             CenterView::Image(path) => imageview::page_id(path),
@@ -1347,9 +1402,9 @@ impl AppCmds {
         let view = self.center_view.borrow().clone();
         if let Some(button) = &self.pipeline_btn {
             if view == CenterView::Pipeline {
-                button.add_css_class("suggested-action");
+                button.add_css_class("opm-active-tab");
             } else {
-                button.remove_css_class("suggested-action");
+                button.remove_css_class("opm-active-tab");
             }
         }
         while let Some(child) = self.image_strip.first_child() {
@@ -1360,7 +1415,7 @@ impl AppCmds {
             let open = gtk4::Button::with_label(&imageview::page_title(path));
             open.set_tooltip_text(Some(&path.display().to_string()));
             if view == CenterView::Image(path.clone()) {
-                open.add_css_class("suggested-action");
+                open.add_css_class("opm-active-tab");
             }
             {
                 let slot = self.slot.clone();
@@ -1485,8 +1540,22 @@ impl AppCmds {
 }
 
 impl Commands for AppCmds {
+    fn marketplace(&self) {
+        let slot = self.slot.clone();
+        let changed = slot.clone();
+        marketplace::open(&self.window, Rc::new(move || {
+            if let Some(me) = changed.borrow().as_ref().and_then(Weak::upgrade) {
+                if let Some(palette) = &me.tool_palette { palette.refresh(); }
+            }
+        }), Rc::new(move |tool| {
+            if let Some(me) = slot.borrow().as_ref().and_then(Weak::upgrade) { me.choose_tool(tool); }
+        }));
+    }
+
     fn new(&self) {
-        self.tabs.borrow_mut().new_tab();
+        if *self.center_view.borrow() != CenterView::Welcome {
+            self.tabs.borrow_mut().new_tab();
+        }
         // P2-10: tras crear la pestaña, la página visible vuelve al editor
         // (Ctrl+N en la página «Pipeline»/de imagen debe verse el resultado).
         self.show_view(CenterView::Editor);
@@ -1616,7 +1685,12 @@ impl Commands for AppCmds {
         // P2-10: Ctrl+W despacha por la página visible (A11): la imagen se
         // cierra en su página, «Pipeline» es permanente (no se cierra) y el
         // editor mantiene el flujo clásico con su confirmación §3.7.
-        match self.center_view.borrow().clone() {
+        let view = self.center_view.borrow().clone();
+        match view {
+            CenterView::Welcome => {
+                self.window.close();
+                return;
+            }
             CenterView::Image(path) => {
                 self.close_image(&path);
                 return;
@@ -2116,6 +2190,7 @@ enum SaveTarget {
 
 fn save_target(is_design: bool, view: &CenterView) -> SaveTarget {
     match view {
+        CenterView::Welcome => SaveTarget::Nothing,
         CenterView::Pipeline if is_design => SaveTarget::PipelineDoc,
         CenterView::Pipeline => SaveTarget::Nothing,
         CenterView::Image(_) => SaveTarget::Nothing,
@@ -2192,41 +2267,74 @@ fn show_error(parent: &impl IsA<gtk4::Window>, message: &str) {
 /// cada región es una caja `opm-panel` con borde de1px y cabecera tintada,
 /// elevación declarada UNA sola vez (borde, sin sombras, sin gradientes).
 fn theme_css(palette: &theme::Palette) -> String {
-    format!(
-        "window {{ background-color: {bg}; color: {fg}; }}\n\
-         textview, textview > text {{ font-family: monospace; background-color: {bg}; color: {fg}; }}\n\
-         .opm-tab-bar {{ background-color: {code}; }}\n\
-         .opm-tab-bar button {{ padding: 2px 10px; }}\n\
-         .opm-tab-bar button.suggested-action {{ border-bottom: 2px solid {fg}; font-weight: bold; }}\n\
-         .opm-explorer {{ background-color: {bg}; color: {fg}; }}\n\
-         .opm-explorer listview {{ background-color: {bg}; color: {fg}; }}\n\
-         .opm-explorer listview button {{ background-color: {bg}; color: {fg}; }}\n\
-         .opm-explorer listview label {{ color: {fg}; }}\n\
-         .opm-find-bar {{ background-color: {code}; }}\n\
-         .opm-panel {{ border: 1px solid alpha({fg}, 0.32); border-radius: 6px; background-color: {bg}; }}\n\
-         .opm-panel-header {{ background-color: {code}; border-bottom: 1px solid alpha({fg}, 0.32); border-radius: 5px 5px 0 0; padding: 3px 8px; }}\n\
-         .opm-panel-header label {{ color: {fg}; font-weight: bold; }}\n\
-         .opm-panel-body {{ padding: 6px; }}\n\
-         .opm-console, .opm-console textview, .opm-console textview > text {{ background-color: {code}; color: {fg}; }}\n\
-         paned > separator {{ background-color: alpha({fg}, 0.25); min-width: 5px; min-height: 5px; }}\n",
-        bg = palette.bg,
-        fg = palette.fg,
-        code = palette.code_bg,
+    format!(r#"
+        window {{ background-color: {code}; color: {fg}; }}
+        textview, textview > text {{ font-family: monospace; background-color: {bg}; color: {fg}; }}
+        .opm-mono {{ font-family: monospace; }}
+        .opm-dim, .opm-empty {{ color: {muted}; }}
+        .opm-tab-bar, .opm-find-bar {{ background-color: {code}; }}
+        .opm-tab-bar button {{ padding: 6px 12px; border-radius: 0; border: 0; border-bottom: 2px solid transparent; background-image: none; background-color: transparent; color: {muted}; box-shadow: none; }}
+        .opm-tab-bar button:hover {{ background-color: alpha({accent}, 0.08); }}
+        .opm-tab-bar button.opm-active-tab {{ border-bottom-color: {accent}; background-color: alpha({accent}, 0.08); color: {accent}; font-weight: bold; }}
+        .opm-explorer, .opm-explorer listview {{ background-color: {bg}; color: {fg}; }}
+        .opm-explorer listview label {{ color: {fg}; }}
+        .opm-panel {{ border: 1px solid {rule}; border-radius: 6px; background-color: {bg}; }}
+        .opm-panel-header {{ background-color: {code}; border-bottom: 1px solid {rule}; border-radius: 5px 5px 0 0; padding: 8px 12px; }}
+        .opm-panel-header label {{ color: {fg}; font-weight: bold; }}
+        .opm-panel-body {{ padding: 0; }}
+        .opm-toolbar {{ padding: 4px; }}
+        .opm-tools-toggle {{ min-width: 24px; min-height: 24px; padding: 2px; }}
+        .opm-tools-grip {{ background-color: {code}; }}
+        .opm-tools-body {{ padding: 12px; }}
+        .opm-console, .opm-console textview, .opm-console textview > text {{ background-color: {code}; color: {fg}; }}
+        .opm-logs-header label {{ font-weight: normal; }}
+        .opm-step-name {{ font-size: 1.15em; font-weight: bold; }}
+        .opm-section-title {{ font-weight: bold; margin-top: 8px; margin-bottom: 4px; }}
+        .opm-inspector-section {{ border-top: 1px solid {rule}; padding-top: 8px; margin-top: 12px; }}
+        .opm-code-block {{ background-color: {code}; border: 1px solid {rule}; border-radius: 6px; padding: 10px; }}
+        .opm-field {{ margin-bottom: 8px; }}
+        .opm-pill {{ border-radius: 12px; padding: 3px 8px; background-color: {code}; color: {muted}; }}
+        .opm-pill-running {{ color: {warning}; background-color: alpha({warning}, 0.12); }}
+        .opm-pill-ok {{ color: {success}; background-color: alpha({success}, 0.12); }}
+        .opm-pill-error {{ color: {danger}; background-color: alpha({danger}, 0.12); }}
+        .opm-issue-blocker, .opm-inline-error {{ color: {danger}; }}
+        .opm-issue-warning {{ color: {warning}; }}
+        .opm-counter-hot {{ color: {danger}; font-weight: bold; }}
+        .opm-step-option-row, .opm-step-output-row {{ border: 1px solid {rule}; border-radius: 6px; padding: 12px; background-color: {bg}; }}
+        .opm-step-dialog {{ background-color: {code}; }}
+        .opm-dialog-header {{ padding: 12px 16px; border-bottom: 1px solid {rule}; }}
+        .opm-dialog-form {{ padding: 16px; }}
+        .opm-dialog-footer {{ padding: 12px 16px; border-top: 1px solid {rule}; background-color: {bg}; }}
+        .opm-welcome-title {{ font-size: 2em; font-weight: bold; }}
+        .opm-welcome-card {{ padding: 24px; border: 1px solid {rule}; border-radius: 8px; background-color: {bg}; }}
+        .opm-canvas:focus-visible {{ outline: 2px solid {accent}; outline-offset: -3px; }}
+        button:focus-visible, entry:focus-within, dropdown:focus-visible {{ outline-color: {accent}; }}
+        paned > separator {{ background-color: {code}; min-width: 6px; min-height: 6px; }}
+    "#,
+        bg = palette.bg, fg = palette.fg, code = palette.code_bg,
+        muted = palette.muted, rule = palette.rule,
+        accent = palette.color("accent").unwrap(), warning = palette.color("warning").unwrap(),
+        success = palette.color("success").unwrap(), danger = palette.color("danger").unwrap(),
     )
 }
 
-/// Estiliza la UI GTK con la paleta del tema detectado (§23).
+// One display provider; later windows and theme changes update it in place.
+thread_local! {
+    static WORKSPACE_THEME: RefCell<Option<CssProvider>> = const { RefCell::new(None) };
+}
+
 fn install_theme_css(palette: &theme::Palette) {
-    let css = theme_css(palette);
-    let provider = CssProvider::new();
-    provider.load_from_data(&css);
-    if let Some(display) = gtk4::gdk::Display::default() {
-        gtk4::style_context_add_provider_for_display(
-            &display,
-            &provider,
-            gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
-        );
-    }
+    WORKSPACE_THEME.with_borrow_mut(|slot| {
+        let provider = slot.get_or_insert_with(|| {
+            let provider = CssProvider::new();
+            if let Some(display) = gtk4::gdk::Display::default() {
+                gtk4::style_context_add_provider_for_display(&display, &provider,
+                    gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION);
+            }
+            provider
+        });
+        provider.load_from_data(&theme_css(palette));
+    });
 }
 
 /// Desconecta el grupo `win.*` de la ventana: sus acciones retienen
@@ -2416,6 +2524,7 @@ fn build_window(app: &Application, scope: WindowScope, open_paths: &[PathBuf]) -
     let is_design = scope.is_design();
     let is_work = scope.is_work();
     let has_pipeline = scope.has_pipeline_surface();
+    let show_welcome = matches!(&scope, WindowScope::Standalone) && open_paths.is_empty();
     let slot: Rc<CmdSlot> = Rc::new(RefCell::new(None));
     let tabs = Rc::new(RefCell::new(TabManager::new()));
     tabs.borrow_mut().set_scope(scope.clone());
@@ -2549,8 +2658,19 @@ fn build_window(app: &Application, scope: WindowScope, open_paths: &[PathBuf]) -
     // página «Pipeline» y el panel de paso solo existen en ventanas con
     // superficie de pipeline (diseño/trabajo).
     let stack = Stack::new();
+    stack.set_hhomogeneous(false);
+    stack.set_vhomogeneous(false);
     stack.set_hexpand(true);
     stack.add_named(&editor_pane.widget(), Some("editor"));
+    if show_welcome {
+        let slot = slot.clone();
+        let page = welcome::build(project::restore(), Rc::new(move |root| {
+            if let Some(me) = slot.borrow().as_ref().and_then(Weak::upgrade) {
+                me.spawn_window(WindowScope::Work(root), &[]);
+            }
+        }));
+        stack.add_named(&page, Some("welcome"));
+    }
 
     let canvas = if has_pipeline {
         let callbacks = CanvasCallbacks {
@@ -2626,6 +2746,18 @@ fn build_window(app: &Application, scope: WindowScope, open_paths: &[PathBuf]) -
                     }
                 })
             },
+            on_place: {
+                let slot = slot.clone();
+                Rc::new(move |x, y| {
+                    if let Some(me) = slot.borrow().as_ref().and_then(Weak::upgrade) { me.paint_tool(x, y); }
+                })
+            },
+            on_cancel_brush: {
+                let slot = slot.clone();
+                Rc::new(move || {
+                    if let Some(me) = slot.borrow().as_ref().and_then(Weak::upgrade) { me.clear_tool_brush(); }
+                })
+            },
             edits_enabled: {
                 let slot = slot.clone();
                 Rc::new(move || {
@@ -2641,11 +2773,38 @@ fn build_window(app: &Application, scope: WindowScope, open_paths: &[PathBuf]) -
             },
         };
         let canvas = PipelineCanvas::new(palette, callbacks);
-        stack.add_named(&canvas.widget(), Some("pipeline"));
+        let surface = gtk4::Overlay::new();
+        surface.set_child(Some(&canvas.widget()));
+        let controls = canvas.viewport_controls();
+        controls.set_halign(gtk4::Align::End);
+        controls.set_valign(gtk4::Align::End);
+        controls.set_margin_end(12);
+        controls.set_margin_bottom(12);
+        surface.add_overlay(&controls);
+        stack.add_named(&surface, Some("pipeline"));
         Some(canvas)
     } else {
         None
     };
+
+    let tool_palette = is_design.then(|| {
+        marketplace::ToolPalette::new({
+            let slot = slot.clone();
+            Rc::new(move |tool| {
+                if let Some(me) = slot.borrow().as_ref().and_then(Weak::upgrade) { me.choose_tool(tool); }
+            })
+        }, {
+            let slot = slot.clone();
+            Rc::new(move || {
+                if let Some(me) = slot.borrow().as_ref().and_then(Weak::upgrade) { me.marketplace(); }
+            })
+        }, {
+            let slot = slot.clone();
+            Rc::new(move || {
+                if let Some(me) = slot.borrow().as_ref().and_then(Weak::upgrade) { me.clear_tool_brush(); }
+            })
+        })
+    });
 
     // Panel derecho de detalle (§6): en DISEÑO edita pasos (Edit) con los
     // valores como solo lectura; en TRABAJO muestra valores editables
@@ -2750,6 +2909,9 @@ fn build_window(app: &Application, scope: WindowScope, open_paths: &[PathBuf]) -
             label.set_ellipsize(gtk4::pango::EllipsizeMode::Middle);
             label.set_tooltip_text(Some(&project::library_root().display().to_string()));
             label.add_css_class("heading");
+            label.set_hexpand(true);
+            label.set_xalign(0.0);
+            label.set_width_chars(12);
             toolbar.append(&label);
             design_label = Some(label);
         } else {
@@ -2777,6 +2939,8 @@ fn build_window(app: &Application, scope: WindowScope, open_paths: &[PathBuf]) -
         if is_design {
             // Diseño: guardar/importar; sin Run/Stop (no hay ejecución).
             let save_btn = button("Save");
+            save_btn.remove_css_class("flat");
+            save_btn.add_css_class("suggested-action");
             save_btn.set_tooltip_text(Some("Save pipeline into the library"));
             {
                 let slot = slot.clone();
@@ -2798,10 +2962,15 @@ fn build_window(app: &Application, scope: WindowScope, open_paths: &[PathBuf]) -
             }
             toolbar.append(&save_btn);
             toolbar.append(&import_btn);
+            let market = button("Marketplace");
+            market.set_action_name(Some("win.marketplace"));
+            toolbar.append(&market);
             (Some(toolbar), None, None, design_label)
         } else {
             // Trabajo: ejecución; sin Save/Import (el dominio es run.json).
             let run_btn = button("Run selected");
+            run_btn.remove_css_class("flat");
+            run_btn.add_css_class("suggested-action");
             {
                 let slot = slot.clone();
                 run_btn.connect_clicked(move |_| {
@@ -2830,7 +2999,12 @@ fn build_window(app: &Application, scope: WindowScope, open_paths: &[PathBuf]) -
     // Columna central: franja + find bar + stack de páginas (se envuelve en
     // su caja-panel solo cuando hay paneles hermanos: explorador o paso).
     let center_col = GtkBox::new(Orientation::Vertical, 0);
-    center_col.append(&strip);
+    let tabs_scroll = gtk4::ScrolledWindow::new();
+        tabs_scroll.set_overlay_scrolling(false);
+    tabs_scroll.set_policy(gtk4::PolicyType::Automatic, gtk4::PolicyType::Never);
+    tabs_scroll.set_propagate_natural_height(true);
+    tabs_scroll.set_child(Some(&strip));
+    center_col.append(&tabs_scroll);
     center_col.append(&find_bar.widget());
     center_col.append(&stack);
     stack.set_vexpand(true);
@@ -2838,9 +3012,9 @@ fn build_window(app: &Application, scope: WindowScope, open_paths: &[PathBuf]) -
     // Estilo «borde + cabecera» (§6): cada región es una caja `opm-panel`
     // con cabecera (`Explorer`, `Pipeline`, `Step`, `Logs`) y los `Paned`
     // separadores tienen agarre visible (≥5px, CSS `paned > separator`).
-    // Composición por presencia — DISEÑO: `centro | paso`; FOLDER:
+    // Composición por presencia — DISEÑO: `herramientas | centro | paso`; FOLDER:
     // `explorador | centro`; TRABAJO: las cuatro cajas; STANDALONE: centro.
-    let explorer_width = if explorer_state.visible {
+    let explorer_width = if explorer.is_some() && explorer_state.visible {
         explorer_state.width
     } else {
         0
@@ -2857,19 +3031,110 @@ fn build_window(app: &Application, scope: WindowScope, open_paths: &[PathBuf]) -
     let mut explorer_paned: Option<Paned> = None;
     let mut explorer_panel: Option<GtkBox> = None;
     let explorer_visible = explorer.is_some() && explorer_state.visible;
+    if let Some(palette) = &tool_palette {
+        let tools = Paned::new(Orientation::Horizontal);
+        tools.set_wide_handle(true);
+        // Flecha diminuta INTEGRADA en la cabecera de la ventana de Tools:
+        // el clic colapsa el panel hacia la izquierda y deja solo la flecha,
+        // que lo vuelve a abrir.
+        let panel = GtkBox::new(Orientation::Vertical, 0);
+        panel.add_css_class("opm-panel");
+        let header = GtkBox::new(Orientation::Horizontal, 6);
+        header.add_css_class("opm-panel-header");
+        let toggle = gtk4::Button::from_icon_name("go-previous-symbolic");
+        toggle.update_property(&[gtk4::accessible::Property::Label("Hide tools")]);
+        toggle.add_css_class("flat");
+        toggle.add_css_class("opm-tools-toggle");
+        toggle.set_tooltip_text(Some("Hide tools"));
+        let title = gtk4::Label::new(Some("Tools"));
+        title.set_halign(gtk4::Align::Start);
+        title.set_xalign(0.0);
+        title.set_hexpand(true);
+        header.append(&toggle);
+        header.append(&title);
+        let body = GtkBox::new(Orientation::Vertical, 0);
+        body.add_css_class("opm-panel-body");
+        body.set_vexpand(true);
+        body.add_css_class("opm-tools-body");
+        let tool_scroll = gtk4::ScrolledWindow::new();
+        tool_scroll.set_overlay_scrolling(false);
+        tool_scroll.set_policy(gtk4::PolicyType::Automatic, gtk4::PolicyType::Never);
+        tool_scroll.set_min_content_width(160);
+        tool_scroll.set_propagate_natural_width(true);
+        tool_scroll.set_child(Some(&palette.widget()));
+        tool_scroll.set_vexpand(true);
+        body.append(&tool_scroll);
+        palette.widget().set_vexpand(true);
+        panel.append(&header);
+        panel.append(&body);
+        // `resize_start_child(false)` alinea el panel por la derecha del
+        // divisor y lo deja en su ancho natural: el ancho reservado debe
+        // cubrirlo o se sale por el borde izquierdo (+8 margen).
+        let panel_width = panel.measure(Orientation::Horizontal, -1).1 + 8;
+        {
+            let shown = Rc::new(Cell::new(true));
+            let tools = tools.clone();
+            let body = body.clone();
+            let title = title.clone();
+            let panel = panel.clone();
+            let header = header.clone();
+            toggle.connect_clicked(move |button| {
+                let now_shown = !shown.get();
+                shown.set(now_shown);
+                body.set_visible(now_shown);
+                title.set_visible(now_shown);
+                // Colapsado: solo la franja de puntitos con la flecha, sin
+                // marco ni bordes redondeados.
+                if now_shown {
+                    panel.add_css_class("opm-panel");
+                    panel.remove_css_class("opm-tools-grip");
+                    header.add_css_class("opm-panel-header");
+                } else {
+                    panel.remove_css_class("opm-panel");
+                    panel.add_css_class("opm-tools-grip");
+                    header.remove_css_class("opm-panel-header");
+                }
+                button.set_icon_name(if now_shown { "go-previous-symbolic" } else { "go-next-symbolic" });
+                button.update_property(&[gtk4::accessible::Property::Label(if now_shown { "Hide tools" } else { "Show tools" })]);
+                button
+                    .set_tooltip_text(Some(if now_shown { "Hide tools" } else { "Show tools" }));
+                tools.set_position(panel.measure(Orientation::Horizontal, -1).1 + 8);
+            });
+        }
+        tools.set_start_child(Some(&panel));
+        tools.set_end_child(Some(&current));
+        tools.set_position(panel_width);
+        tools.set_resize_start_child(false);
+        tools.set_shrink_start_child(false);
+        tools.set_shrink_end_child(false);
+        current = tools.upcast();
+    }
     if let Some(step_panel) = &step_panel {
         let inner = Paned::new(Orientation::Horizontal);
         inner.set_wide_handle(true);
         inner.set_start_child(Some(&current));
-        inner.set_end_child(Some(&panel_box("Step", &step_panel.widget())));
+        inner.set_end_child(Some(&panel_box("Inspector", &step_panel.widget())));
+        inner.set_resize_end_child(false);
+        inner.set_shrink_start_child(false);
+        inner.set_shrink_end_child(false);
         inner.set_position((window.default_width() - explorer_width - 360).max(240));
         current = inner.upcast();
     }
     if let Some(explorer) = &explorer {
-        let panel = panel_box("Explorer", &explorer.widget());
+        // A horizontally scrollable navigator keeps its controls reachable
+        // when the three-pane workspace is narrowed to 800 px.
+        let navigator = gtk4::ScrolledWindow::new();
+        navigator.set_overlay_scrolling(false);
+        navigator.set_policy(gtk4::PolicyType::Automatic, gtk4::PolicyType::Never);
+        navigator.set_min_content_width(160);
+        navigator.set_child(Some(&explorer.widget()));
+        let panel = panel_box("Explorer", &navigator);
         let main_paned = Paned::new(Orientation::Horizontal);
         main_paned.set_wide_handle(true);
         main_paned.set_end_child(Some(&current));
+        main_paned.set_resize_start_child(false);
+        main_paned.set_shrink_start_child(false);
+        main_paned.set_shrink_end_child(false);
         if explorer_state.visible {
             main_paned.set_start_child(Some(&panel));
             main_paned.set_position(explorer_state.width);
@@ -2883,15 +3148,25 @@ fn build_window(app: &Application, scope: WindowScope, open_paths: &[PathBuf]) -
         vertical.set_wide_handle(true);
         vertical.set_start_child(Some(&current));
         vertical.set_end_child(Some(&logs.widget()));
-        vertical.set_position((window.default_height() - 300).max(240));
+        vertical.set_resize_end_child(false);
+        vertical.set_shrink_start_child(false);
+        vertical.set_position((window.default_height() - 230).max(240));
         current = vertical.upcast();
     }
     let content = current;
+    content.set_margin_start(8);
+    content.set_margin_end(8);
+    content.set_margin_bottom(8);
 
     let vbox = GtkBox::new(Orientation::Vertical, 0);
     vbox.append(&menubar);
     if let Some(toolbar) = &toolbar {
-        vbox.append(toolbar);
+        let toolbar_scroll = gtk4::ScrolledWindow::new();
+        toolbar_scroll.set_overlay_scrolling(false);
+        toolbar_scroll.set_policy(gtk4::PolicyType::Automatic, gtk4::PolicyType::Never);
+        toolbar_scroll.set_propagate_natural_height(true);
+        toolbar_scroll.set_child(Some(toolbar));
+        vbox.append(&toolbar_scroll);
     }
     vbox.append(&content);
     content.set_vexpand(true);
@@ -2914,6 +3189,8 @@ fn build_window(app: &Application, scope: WindowScope, open_paths: &[PathBuf]) -
         store,
         design: is_design.then(|| RefCell::new(DesignState::new(""))),
         design_label,
+        tool_palette,
+        tool_brush: RefCell::new(None),
         exec,
         run_model: RefCell::new(RunModel::new()),
         running: Cell::new(false),
@@ -2986,12 +3263,35 @@ fn build_window(app: &Application, scope: WindowScope, open_paths: &[PathBuf]) -
         }
     });
 
+    // Restyle the existing widgets when desktop appearance changes. Weak
+    // captures and disconnect-on-destroy keep Settings from retaining windows.
+    if let Some(settings) = gtk4::Settings::default() {
+        let handlers: Vec<_> = ["gtk-theme-name", "gtk-application-prefer-dark-theme"]
+            .into_iter().map(|property| {
+                let weak = Rc::downgrade(&cmds);
+                settings.connect_notify_local(Some(property), move |_, _| {
+                    let Some(me) = weak.upgrade() else { return; };
+                    let palette = theme::palette();
+                    install_theme_css(&palette);
+                    me.editor_pane.set_palette(&palette);
+                    if let Some(canvas) = &me.canvas { canvas.set_palette(palette); }
+                    if let Some(logs) = &me.logs { logs.set_palette(&palette); }
+                })
+            }).collect();
+        let handlers = RefCell::new(handlers);
+        window.connect_destroy(move |_| {
+            for handler in handlers.borrow_mut().drain(..) { settings.disconnect(handler); }
+        });
+    }
+
     // Página inicial: «Pipeline» en ventanas con superficie de pipeline
     // (paridad SPA), editor en standalone/folder; después el contenido
     // activo, la etiqueta de diseño (nombre + raíz de librería) y el primer
     // refresco de dominio (canvas, contadores, panel).
     cmds.show_view(if has_pipeline {
         CenterView::Pipeline
+    } else if show_welcome {
+        CenterView::Welcome
     } else {
         CenterView::Editor
     });
@@ -3033,22 +3333,9 @@ fn main() {
             build_window(app, scope, &[]);
         }
         if files.is_empty() && folders.is_empty() {
-            // §11 A13/§6: restauración de la sesión con TTL de 1 h. Una
-            // sesión caducada se limpia en silencio (paridad SPA) y una que
-            // apunta a algo inválido (sin `run.json` o corrupto) se limpia
-            // MOSTRANDO el error; sin sesión, la ventana standalone.
-            match project::restore() {
-                project::Restore::Work(root) => {
-                    build_window(app, WindowScope::Work(root), &[]);
-                }
-                project::Restore::Failed(message) => {
-                    let cmds = build_window(app, WindowScope::Standalone, &[]);
-                    show_error(&cmds.window, &message);
-                }
-                project::Restore::None => {
-                    build_window(app, WindowScope::Standalone, &[]);
-                }
-            }
+            // Bare launch shows the start page. The existing recent-work
+            // TTL and validation feed its explicit reopen action.
+            build_window(app, WindowScope::Standalone, &[]);
         }
     });
     // Los ficheros de la línea de comandos se abren en `connect_activate`; no
@@ -3059,6 +3346,101 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Full GTK smoke: configure a brush, paint, browse the real registry and
+    /// install a tool and pipeline into isolated libraries. Save review images.
+    #[test]
+    #[ignore = "requires a graphical session, public GitHub access and isolated OPM_* directories"]
+    fn marketplace_and_brush_graphical_smoke() {
+        use gtk4::gsk::prelude::*;
+        use std::time::Instant;
+        fn widgets(root: &Widget) -> Vec<Widget> {
+            let mut result = vec![root.clone()]; let mut child = root.first_child();
+            while let Some(widget) = child { child = widget.next_sibling(); result.extend(widgets(&widget)); }
+            result
+        }
+        fn labels(root: &Widget) -> Vec<String> {
+            widgets(root).into_iter().filter_map(|w| w.downcast::<gtk4::Label>().ok()).map(|w| w.text().to_string()).collect()
+        }
+        fn wait(mut ready: impl FnMut() -> bool) {
+            let deadline = Instant::now() + Duration::from_secs(45);
+            loop {
+                while glib::MainContext::default().pending() { glib::MainContext::default().iteration(false); }
+                if ready() { return; }
+                assert!(Instant::now() < deadline, "GTK smoke timed out");
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+        fn capture(window: &impl IsA<gtk4::Window>, path: &Path) {
+            let window = window.as_ref();
+            let paintable = gtk4::WidgetPaintable::new(Some(window));
+            let snapshot = gtk4::Snapshot::new();
+            paintable.snapshot(&snapshot, window.width() as f64, window.height() as f64);
+            let node = snapshot.to_node().expect("rendered window");
+            let renderer = gtk4::gsk::Renderer::for_surface(&window.surface().unwrap()).unwrap();
+            renderer.render_texture(&node, None).save_to_png(path).unwrap();
+            renderer.unrealize();
+        }
+        fn install_row(window: &gtk4::Window, name: &str) {
+            let row = widgets(window.upcast_ref()).into_iter()
+                .filter_map(|w| w.downcast::<gtk4::ListBoxRow>().ok())
+                .find(|row| labels(row.upcast_ref()).iter().any(|s| s == name)).expect("catalog row");
+            let button = widgets(row.upcast_ref()).into_iter().filter_map(|w| w.downcast::<gtk4::Button>().ok())
+                .find(|b| b.label().as_deref() == Some("Add to OPM")).expect("install button");
+            button.emit_clicked();
+        }
+        let tools_dir = std::env::var_os("OPM_TOOLS_DIR").expect("isolated OPM_TOOLS_DIR");
+        let pipelines_dir = std::env::var_os("OPM_PIPELINES_DIR").expect("isolated OPM_PIPELINES_DIR");
+        assert!(Path::new(&tools_dir).starts_with(std::env::temp_dir()));
+        assert!(Path::new(&pipelines_dir).starts_with(std::env::temp_dir()));
+        let output = PathBuf::from(std::env::var_os("OPM_QA_DIR").expect("OPM_QA_DIR"));
+        std::fs::create_dir_all(&output).unwrap();
+        assert!(gtk4::init().is_ok());
+        let app = Application::builder().application_id("app.opm.marketplace.smoke").flags(gio::ApplicationFlags::NON_UNIQUE).build();
+        app.register(None::<&gio::Cancellable>).unwrap();
+        let tool = opm_store::ToolDefinition::from_json(include_str!("../../core/opm-store/tests/fixtures/fastqc.json")).unwrap();
+        marketplace::tool_library().save(&tool, SaveMode::CreateNew).unwrap();
+        let cmds = build_window(&app, WindowScope::Design, &[]);
+        cmds.show_view(CenterView::Editor);
+        cmds.choose_tool(tool);
+        wait(|| gtk4::Window::list_toplevels().iter().any(|w| w.downcast_ref::<gtk4::Window>().is_some_and(|w| w.title().is_some_and(|t| t.contains("Tool brush")))));
+        let configuration = gtk4::Window::list_toplevels().into_iter().filter_map(|w| w.downcast::<gtk4::Window>().ok())
+            .find(|w| w.title().is_some_and(|t| t.contains("Tool brush"))).unwrap();
+        widgets(configuration.upcast_ref()).into_iter().filter_map(|w| w.downcast::<gtk4::Button>().ok())
+            .find(|b| b.label().as_deref() == Some("Use brush")).unwrap().emit_clicked();
+        assert!(cmds.tool_brush.borrow().is_some());
+        assert_eq!(gtk4::prelude::RootExt::focus(&cmds.window), Some(cmds.canvas.as_ref().unwrap().widget()));
+        cmds.paint_tool(40.0, 80.0); cmds.paint_tool(340.0, 300.0);
+        assert_eq!(cmds.domain_steps().len(), 2);
+        assert!(cmds.design().unwrap().borrow().dirty());
+        wait(|| cmds.window.width() > 100 && cmds.window.is_mapped());
+        // Allow a frame after placing the cards.
+        let frame = Instant::now(); wait(|| frame.elapsed() > Duration::from_millis(250));
+        assert!(cmds.canvas.as_ref().unwrap().widget().width() > cmds.window.width() / 3,
+            "Design canvas must not reserve space for an absent explorer");
+        capture(&cmds.window, &output.join("tool-palette.png"));
+        let controllers = cmds.canvas.as_ref().unwrap().widget().observe_controllers();
+        let keyboard = (0..controllers.n_items()).filter_map(|index| controllers.item(index))
+            .find_map(|item| item.downcast::<gtk4::EventControllerKey>().ok()).unwrap();
+        assert!(keyboard.emit_by_name::<bool>("key-pressed", &[&65307u32, &0u32, &gtk4::gdk::ModifierType::empty()]));
+        assert!(cmds.tool_brush.borrow().is_none());
+        cmds.paint_tool(800.0, 200.0);
+        assert_eq!(cmds.domain_steps().len(), 2);
+        cmds.marketplace();
+        let market = gtk4::Window::list_toplevels().into_iter().filter_map(|w| w.downcast::<gtk4::Window>().ok())
+            .find(|w| w.title().as_deref() == Some("Tools & Pipeline Marketplace")).unwrap();
+        wait(|| labels(market.upcast_ref()).iter().any(|s| s.ends_with("definitions available")));
+        install_row(&market, "Cutadapt single-end");
+        wait(|| marketplace::tool_library().load("cutadapt-single").is_ok());
+        assert_eq!(marketplace::tool_library().load("cutadapt-single").unwrap().source.unwrap().revision.len(), 40);
+        install_row(&market, "Metagenomics paired-end quality control");
+        wait(|| project::library().load("metagenomics-paired-qc").is_ok());
+        assert_eq!(project::library().load("metagenomics-paired-qc").unwrap().name, "metagenomics-paired-qc");
+        assert_eq!(cmds.domain_steps().len(), 2);
+        capture(&market, &output.join("marketplace.png"));
+        market.destroy();
+        disconnect_window_actions(&cmds.window); cmds.window.destroy();
+    }
 
     /// El CSS generado referencia SOLO clases OPM (`opm-*`) y usa la paleta
     /// completa (fondo, texto y fondo de código).
@@ -3298,6 +3680,7 @@ mod tests {
     /// y nunca genera un `untitled*.txt` por la pestaña de texto activa.
     #[test]
     fn save_despacha_por_pagina_visible() {
+        assert_eq!(save_target(false, &CenterView::Welcome), SaveTarget::Nothing);
         // Diseño + Pipeline: el documento de diseño.
         assert_eq!(
             save_target(true, &CenterView::Pipeline),

@@ -1,5 +1,15 @@
 # Suite de QA manual de Open Pipeline Manager
 
+La [pantalla de inicio y galería 0.3.0](start-page.md) registra la nueva
+navegación inicial, el trabajo reciente y las capturas reproducibles del README.
+
+La [revisión visual del workspace GTK4](workspace.md) documenta el rediseño
+0.4.1, sus capturas reales y los límites de la verificación de accesibilidad.
+
+La [comprobación automatizada del Marketplace y el pincel](marketplace.md)
+documenta el nuevo flujo de herramientas en OPM 0.4.0, con capturas de ventanas
+aisladas. El alcance y el registro manual siguientes corresponden a OPM 0.3.0.
+
 Alcance: aplicación de escritorio completa (versión 0.3.0, persistencia `pipeline-storage`), con énfasis en la biblioteca de pipelines, las carpetas de trabajo y la ejecución. Casos diseñados para localizar fallos por pantalla desde la interfaz, sin conocimiento del código.
 
 Preparada el 2026-11-05 a partir de `MANUAL.md`, `docs/PIPELINE_STORAGE.md`, `DECISIONS.md`, las suites automatizadas de `core/` y `ui/`, y la revisión de superficies de `ui/src`. Verificada sobre el binario de producción en Linux/X11; los resultados esperados son criterios de QA, no resultados de una ejecución. El [registro de ejecución](registro-ejecucion.md) recoge la ejecución real.
