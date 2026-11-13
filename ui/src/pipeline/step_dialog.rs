@@ -673,7 +673,10 @@ impl ValueRow {
         let container = gtk::Box::new(gtk::Orientation::Vertical, 4);
         container.add_css_class("opm-step-option-row");
 
-        let main = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        let main = gtk::Grid::new();
+        main.set_column_spacing(12);
+        main.set_row_spacing(8);
+        main.set_column_homogeneous(true);
         let key = gtk::Entry::new();
         key.set_width_chars(10);
         key.set_placeholder_text(Some("key"));
@@ -687,20 +690,22 @@ impl ValueRow {
         let default_dd = gtk::DropDown::from_strings(&["No default", "True", "False"]);
         let var_btn = gtk::Button::with_label("Pipeline var");
         var_btn.set_tooltip_text(Some("Insert VARIABLE={key} in command"));
-        let required = gtk::CheckButton::new();
+        let required = gtk::CheckButton::with_label("Required");
         required.set_tooltip_text(Some("Required"));
-        let remove_btn = gtk::Button::with_label("✕");
+        let remove_btn = gtk::Button::from_icon_name("list-remove-symbolic");
+        remove_btn.update_property(&[gtk::accessible::Property::Label("Remove field")]);
         remove_btn.set_tooltip_text(Some("Remove"));
         remove_btn.add_css_class("opm-danger-button");
 
-        main.append(&cell("Key", &key));
-        main.append(&cell("Label", &label));
-        main.append(&cell("Type", &kind));
-        main.append(&cell("Default", &default_entry));
-        main.append(&cell("Default", &default_dd));
-        main.append(&var_btn);
-        main.append(&cell("Required", &required));
-        main.append(&remove_btn);
+        main.attach(&cell("Key", &key), 0, 0, 1, 1);
+        main.attach(&cell("Label", &label), 1, 0, 1, 1);
+        main.attach(&cell("Type", &kind), 2, 0, 1, 1);
+        main.attach(&cell("Default", &default_entry), 0, 1, 2, 1);
+        main.attach(&cell("Default", &default_dd), 0, 1, 2, 1);
+        let actions = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        actions.set_valign(gtk::Align::End);
+        actions.append(&required);
+        main.attach(&actions, 2, 1, 1, 1);
         container.append(&main);
 
         let extras = gtk::Box::new(gtk::Orientation::Horizontal, 6);
@@ -726,6 +731,11 @@ impl ValueRow {
             extras.append(&cell("From output", dropdown));
         }
         container.append(&extras);
+        let tools = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        tools.set_halign(gtk::Align::End);
+        tools.append(&var_btn);
+        tools.append(&remove_btn);
+        container.append(&tools);
 
         let row = Rc::new(Self {
             container,
@@ -795,6 +805,8 @@ impl ValueRow {
         let index = self.kind.selected() as usize;
         self.default_entry.set_visible(index != BOOLEAN_TYPE_INDEX);
         self.default_dd.set_visible(index == BOOLEAN_TYPE_INDEX);
+        if let Some(parent) = self.default_entry.parent() { parent.set_visible(index != BOOLEAN_TYPE_INDEX); }
+        if let Some(parent) = self.default_dd.parent() { parent.set_visible(index == BOOLEAN_TYPE_INDEX); }
         self.choices.set_visible(index == 4);
         if let Some(parent) = self.choices.parent() {
             parent.set_visible(index == 4);
@@ -903,16 +915,17 @@ impl OutputRow {
         path.set_hexpand(true);
         let var_btn = gtk::Button::with_label("Pipeline var");
         var_btn.set_tooltip_text(Some("Insert VARIABLE={key} in command"));
-        let remove_btn = gtk::Button::with_label("✕");
+        let remove_btn = gtk::Button::from_icon_name("list-remove-symbolic");
+        remove_btn.update_property(&[gtk::accessible::Property::Label("Remove output")]);
         remove_btn.set_tooltip_text(Some("Remove output"));
         remove_btn.add_css_class("opm-danger-button");
 
         main.append(&cell("Key", &key));
         main.append(&cell("Label", &label));
-        main.append(&cell("Path", &path));
         main.append(&var_btn);
         main.append(&remove_btn);
         container.append(&main);
+        container.append(&cell("Path", &path));
 
         Rc::new(Self {
             container,
@@ -952,6 +965,8 @@ fn cell(label: &str, widget: &impl IsA<gtk::Widget>) -> gtk::Box {
     caption.set_halign(gtk::Align::Start);
     caption.set_xalign(0.0);
     caption.add_css_class("opm-dim");
+    widget.as_ref().update_property(&[gtk::accessible::Property::Label(label)]);
+    vertical.set_hexpand(true);
     vertical.append(&caption);
     vertical.append(widget);
     vertical
@@ -1012,7 +1027,8 @@ impl DialogState {
             self.footer
                 .set_text("Choose a valid boolean default before saving.");
         } else {
-            self.footer.set_text(&self.resolved_wd());
+            self.footer.set_text(&format!("Working directory: {}", self.resolved_wd()));
+            self.footer.set_tooltip_text(Some(&self.resolved_wd()));
         }
     }
 
@@ -1388,19 +1404,17 @@ pub fn open_step_dialog(
         .title(if editing { "Edit step" } else { "Create step" })
         .modal(true)
         .transient_for(parent.upcast_ref::<gtk::Window>())
-        .default_width(700)
+        .default_width(760)
         .default_height(640)
         .resizable(true)
         .build();
 
-    let vbox = gtk::Box::new(gtk::Orientation::Vertical, 10);
-    vbox.set_margin_top(12);
-    vbox.set_margin_bottom(12);
-    vbox.set_margin_start(12);
-    vbox.set_margin_end(12);
+    window.add_css_class("opm-step-dialog");
+    let vbox = gtk::Box::new(gtk::Orientation::Vertical, 0);
 
     // Cabecera.
     let header = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    header.add_css_class("opm-dialog-header");
     let title = gtk::Label::new(Some(if editing {
         "Edit step"
     } else {
@@ -1409,12 +1423,20 @@ pub fn open_step_dialog(
     title.set_halign(gtk::Align::Start);
     title.set_hexpand(true);
     title.add_css_class("title-2");
-    let close = gtk::Button::with_label("✕");
+    let close = gtk::Button::from_icon_name("window-close-symbolic");
+    close.update_property(&[gtk::accessible::Property::Label("Close step configuration")]);
     close.set_tooltip_text(Some("Close"));
     header.append(&title);
     header.append(&close);
     vbox.append(&header);
 
+    let form_content = gtk::Box::new(gtk::Orientation::Vertical, 16);
+    form_content.add_css_class("opm-dialog-form");
+    let form_scroll = gtk::ScrolledWindow::new();
+    form_scroll.set_policy(gtk::PolicyType::Automatic, gtk::PolicyType::Automatic);
+    form_scroll.set_vexpand(true);
+    form_scroll.set_child(Some(&form_content));
+    vbox.append(&form_scroll);
     // Formulario.
     let form = gtk::Grid::new();
     form.set_row_spacing(8);
@@ -1435,7 +1457,7 @@ pub fn open_step_dialog(
     form.attach(&cell("Environment", &environment_entry), 0, 1, 1, 1);
     form.attach(&cell("Working directory", &wd_entry), 1, 1, 1, 1);
     form.attach(&cell("Description", &description_entry), 0, 2, 2, 1);
-    vbox.append(&form);
+    form_content.append(&form);
 
     // Comando + chips.
     let command_box = gtk::Box::new(gtk::Orientation::Vertical, 4);
@@ -1446,26 +1468,27 @@ pub fn open_step_dialog(
     command.set_wrap_mode(gtk::WrapMode::WordChar);
     command.set_monospace(true);
     command.set_left_margin(4);
-    command.set_right_margin(4);
+    command.set_right_margin(8);
+    command.set_top_margin(8);
+    command.set_bottom_margin(8);
+    command.update_property(&[gtk::accessible::Property::Label("Step command")]);
     let command_scroll = gtk::ScrolledWindow::new();
     command_scroll.set_child(Some(&command));
     command_scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
-    command_scroll.set_min_content_height(64);
+    command_scroll.set_min_content_height(96);
+    command_scroll.add_css_class("opm-code-block");
     command.set_tooltip_text(Some("python script.py --mode {mode}"));
     let chips = gtk::FlowBox::new();
     chips.set_selection_mode(gtk::SelectionMode::None);
-    chips.set_min_children_per_line(6);
+    chips.set_min_children_per_line(1);
     chips.set_max_children_per_line(12);
     chips.set_homogeneous(false);
     command_box.append(&command_caption);
     command_box.append(&command_scroll);
     command_box.append(&chips);
-    vbox.append(&command_box);
+    form_content.append(&command_box);
 
     // Secciones con scroll.
-    let sections_scroll = gtk::ScrolledWindow::new();
-    sections_scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
-    sections_scroll.set_vexpand(true);
     let sections = gtk::Box::new(gtk::Orientation::Vertical, 12);
 
     let inputs_box = gtk::Box::new(gtk::Orientation::Vertical, 6);
@@ -1489,11 +1512,11 @@ pub fn open_step_dialog(
         &outputs_box,
         None,
     ));
-    sections_scroll.set_child(Some(&sections));
-    vbox.append(&sections_scroll);
+    form_content.append(&sections);
 
     // Pie.
     let footer_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    footer_row.add_css_class("opm-dialog-footer");
     let footer = gtk::Label::new(None);
     footer.set_halign(gtk::Align::Start);
     footer.set_xalign(0.0);
@@ -1513,6 +1536,18 @@ pub fn open_step_dialog(
     vbox.append(&footer_row);
 
     window.set_child(Some(&vbox));
+    window.add_controller({
+        let keys = gtk::EventControllerKey::new();
+        let weak = window.downgrade();
+        keys.connect_key_pressed(move |_, key, _, _| {
+            if key == gtk::gdk::Key::Escape {
+                if let Some(window) = weak.upgrade() { window.destroy(); }
+                return gtk::glib::Propagation::Stop;
+            }
+            gtk::glib::Propagation::Proceed
+        });
+        keys
+    });
 
     let state = Rc::new(DialogState {
         window: window.clone(),
@@ -1656,6 +1691,7 @@ pub fn open_step_dialog(
     state.refresh_guard();
 
     window.present();
+    name_entry.grab_focus();
 }
 
 /// Sección `Etiqueta + botón Add + lista de filas`.

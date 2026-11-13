@@ -120,6 +120,26 @@ fn library_roundtrip() {
 
 // -------------------------------------------------------------- naming conflict
 
+#[test]
+fn native_import_preserves_independent_steps_and_canvas_layout() {
+    let (parent, library) = library("native-import");
+    let mut doc = PipelineDoc::new("Shared definition", sample_pipeline());
+    doc.pipeline.steps[1].dependencies.clear();
+    doc.layout.insert("first".into(), Position { x: 42.0, y: -10.0 });
+    let source = parent.join("shared.pipeline");
+    fs::write(&source, serde_json::to_string_pretty(&doc).unwrap()).unwrap();
+    let imported = library.import_file(&source, "my-pipeline").unwrap();
+    assert_eq!(imported.name, "my-pipeline");
+    assert!(imported.pipeline.steps[1].dependencies.is_empty());
+    assert_eq!(imported.layout["first"], doc.layout["first"]);
+    assert!(library.import_file(&source, "my-pipeline").is_err());
+    let mut unsupported = doc; unsupported.format_version = 99;
+    fs::write(&source, serde_json::to_string(&unsupported).unwrap()).unwrap();
+    assert!(library.import_file(&source, "new-name").is_err());
+    assert!(!library.root().join("new-name.pipeline").exists());
+    cleanup(&parent);
+}
+
 /// `CreateNew` over an existing name fails with `NameExists`; `Overwrite`
 /// replaces the document atomically; empty names are rejected.
 #[test]

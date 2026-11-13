@@ -299,10 +299,11 @@ fn import_chains_unconnected_steps_and_builds_default_layout() {
     assert_eq!(steps[1].dependencies, ["first"]);
     assert_eq!(steps[2].dependencies, ["second"]);
 
+    // El fallback apila los pasos sin layout de arriba a abajo, en columna.
     let layout = store.snapshot().visual_layout;
-    assert_eq!(layout["first"], Position { x: 80.0, y: 120.0 });
-    assert_eq!(layout["second"], Position { x: 410.0, y: 120.0 });
-    assert_eq!(layout["third"], Position { x: 740.0, y: 120.0 });
+    assert_eq!(layout["second"].x, layout["first"].x);
+    assert!(layout["second"].y > layout["first"].y);
+    assert!(layout["third"].y > layout["second"].y);
 
     cleanup(&parent);
 }
@@ -558,7 +559,8 @@ fn create_step_applies_defaults_and_appends_to_the_pipeline() {
     );
     assert!(root.join("steps/second/work").is_dir());
     let layout = store.snapshot().visual_layout;
-    assert_eq!(layout["second"], Position { x: 410.0, y: 120.0 });
+    assert_eq!(layout["second"].x, layout["first"].x);
+    assert!(layout["second"].y > layout["first"].y);
 
     cleanup(&parent);
 }

@@ -17,11 +17,13 @@ mod envelope;
 mod library;
 mod state;
 mod store;
+mod tools;
 
 pub use envelope::{FORMAT_VERSION, PipelineDoc, PipelineSource, RunDoc};
 pub use library::{ExportFormat, PipelineLibrary, SaveMode};
 pub use state::{Position, ProjectSnapshot, StepDetail, StepState, StepStatus};
 pub use store::{AdoptReport, ProjectStore, StoreError};
+pub use tools::{ToolArgument, ToolDefinition, ToolField, ToolLibrary, ToolOptions, ToolSource};
 
 use opm_pipeline::Value;
 use std::collections::BTreeMap;

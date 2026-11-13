@@ -28,14 +28,15 @@ pub const FORMAT_VERSION: u32 = 1;
 const LAYOUT_START_X: f64 = 80.0;
 /// `LAYOUT_START_Y`.
 const LAYOUT_START_Y: f64 = 120.0;
-/// `LAYOUT_GAP_X`.
-const LAYOUT_GAP_X: f64 = 330.0;
+/// `LAYOUT_GAP_Y`, the vertical spacing between steps (flows read top to
+/// bottom; the old horizontal `LAYOUT_GAP_X` is gone).
+const LAYOUT_GAP_Y: f64 = 180.0;
 
-/// Default left-to-right canvas position of the step at `index`.
+/// Default top-to-bottom canvas position of the step at `index`.
 pub(crate) fn default_step_position(index: usize) -> Position {
     Position {
-        x: LAYOUT_START_X + index as f64 * LAYOUT_GAP_X,
-        y: LAYOUT_START_Y,
+        x: LAYOUT_START_X,
+        y: LAYOUT_START_Y + index as f64 * LAYOUT_GAP_Y,
     }
 }
 

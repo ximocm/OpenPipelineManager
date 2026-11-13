@@ -404,8 +404,7 @@ pub fn prompt_text(
     window.present();
 }
 
-/// Filtro de ficheros de pipeline (`.yml`, `.yaml`, `.json`) para importar
-/// y exportar (§6: `project/` necesita estos selectores).
+/// Filtro de formatos de intercambio (`.yml`, `.yaml`, `.json`) para exportar.
 pub fn pipeline_filter() -> gtk::FileFilter {
     let filter = gtk::FileFilter::new();
     filter.set_name(Some("Pipeline (*.yml, *.yaml, *.json)"));
@@ -426,13 +425,13 @@ pub async fn open_pipeline(parent: &impl IsA<gtk::Window>) -> Option<PathBuf> {
     dialog.set_modal(true);
 
     let filters = gio::ListStore::new::<gtk::FileFilter>();
-    filters.append(&pipeline_filter());
+    filters.append(&definition_filter());
     let all = gtk::FileFilter::new();
     all.set_name(Some("Todos los archivos"));
     all.add_pattern("*");
     filters.append(&all);
     dialog.set_filters(Some(&filters));
-    dialog.set_default_filter(Some(&pipeline_filter()));
+    dialog.set_default_filter(Some(&definition_filter()));
 
     let parent = parent.upcast_ref::<gtk::Window>();
     let file = dialog.open_future(Some(parent)).await.ok()?;

@@ -41,6 +41,8 @@ pub enum Command {
     ToggleExplorer,
     /// Diseño: crea un documento de pipeline en memoria y abre su ventana.
     NewPipeline,
+    /// Browse and install reusable tool and pipeline definitions.
+    Marketplace,
     /// Diseño: abre un documento de la librería en una ventana de diseño.
     OpenPipeline,
     /// Diseño: importa un `.yml`/`.yaml`/`.json` a la librería.
@@ -85,6 +87,7 @@ impl Command {
             Command::ToggleMode => "win.toggle-mode",
             Command::ToggleExplorer => "win.toggle-explorer",
             Command::NewPipeline => "win.new-pipeline",
+            Command::Marketplace => "win.marketplace",
             Command::OpenPipeline => "win.open-pipeline",
             Command::ImportPipeline => "win.import-pipeline",
             Command::ExportPipeline => "win.export-pipeline",
@@ -118,6 +121,7 @@ impl Command {
             Command::ToggleMode => "Markdown/Visual",
             Command::ToggleExplorer => "Toggle Explorer",
             Command::NewPipeline => "New pipeline",
+            Command::Marketplace => "Marketplace…",
             Command::OpenPipeline => "Open pipeline",
             Command::ImportPipeline => "Import pipeline",
             Command::ExportPipeline => "Export pipeline",
@@ -137,6 +141,7 @@ impl Command {
 
 /// Receptor de comandos: lo implementa el integrador (main.rs).
 pub trait Commands {
+    fn marketplace(&self);
     fn new(&self);
     fn open(&self);
     /// Abre una carpeta como raíz del explorador (ISSUE-021).
@@ -212,6 +217,7 @@ pub const ALL_COMMANDS: &[Command] = &[
     Command::Replace,
     Command::ToggleMode,
     Command::ToggleExplorer,
+    Command::Marketplace,
     Command::NewPipeline,
     Command::OpenPipeline,
     Command::ImportPipeline,
@@ -281,6 +287,7 @@ const MENUBAR_SPEC: &[SubmenuSpec] = &[
     (
         "Pipeline",
         &[&[
+            ("Marketplace…", "win.marketplace"),
             ("Create step", "win.create-step"),
             ("Run selected", "win.run-selected"),
             ("Stop", "win.stop"),
@@ -333,6 +340,7 @@ fn dispatch(cmd: Command, host: &dyn Commands) {
         Command::ToggleMode => host.toggle_mode(),
         Command::ToggleExplorer => host.toggle_explorer(),
         Command::NewPipeline => host.new_pipeline(),
+        Command::Marketplace => host.marketplace(),
         Command::OpenPipeline => host.open_pipeline(),
         Command::ImportPipeline => host.import_pipeline(),
         Command::ExportPipeline => host.export_pipeline(),
@@ -560,6 +568,7 @@ mod tests {
             (
                 "Pipeline",
                 &[&[
+                    ("Marketplace…", "win.marketplace"),
                     ("Create step", "win.create-step"),
                     ("Run selected", "win.run-selected"),
                     ("Stop", "win.stop"),

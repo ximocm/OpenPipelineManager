@@ -1,0 +1,110 @@
+{
+  "steps": [
+    {
+      "id": "prepare_reads",
+      "name": "Prepare reads",
+      "description": "Create a small, reproducible FASTA dataset for this analysis.",
+      "working_directory": ".",
+      "command": "printf '%s\\n' '>read_01' 'ACGTACGT' '>read_02' 'GCTAGCTAGCTA' '>read_03' 'ACGTA' '>read_04' 'TGCATGCATGCATGCA' '>read_05' 'GCTA' '>read_06' 'AACCGGTTAA' > {raw_reads} && printf 'Prepared 6 example sequences\\n'",
+      "outputs": [
+        {
+          "key": "raw_reads",
+          "label": "Example sequences",
+          "path": "Input/reads.fasta"
+        }
+      ]
+    },
+    {
+      "id": "filter_reads",
+      "name": "Filter short reads",
+      "description": "Keep sequences that meet the minimum length.",
+      "working_directory": ".",
+      "command": "awk -v min={min_length} '/^>/ { header = $0; next } length($0) >= min { print header; print $0 }' {raw_reads} > {filtered_reads} && printf 'Length filtering complete\\n'",
+      "inputs": [
+        {
+          "key": "raw_reads",
+          "label": "Input sequences",
+          "type": "file",
+          "required": true,
+          "source_step": "prepare_reads",
+          "source_output": "raw_reads"
+        }
+      ],
+      "parameters": [
+        {
+          "key": "min_length",
+          "label": "Minimum length",
+          "type": "integer",
+          "required": true,
+          "default": 8,
+          "min": 1,
+          "max": 1000
+        }
+      ],
+      "outputs": [
+        {
+          "key": "filtered_reads",
+          "label": "Filtered sequences",
+          "path": "outputs/filtered.fasta"
+        }
+      ],
+      "dependencies": [
+        "prepare_reads"
+      ]
+    },
+    {
+      "id": "compute_metrics",
+      "name": "Compute metrics",
+      "description": "Count the retained reads and their total number of bases.",
+      "working_directory": ".",
+      "command": "awk 'BEGIN { reads = 0; bases = 0 } !/^>/ { reads++; bases += length($0) } END { printf \"reads\\tbases\\n%d\\t%d\\n\", reads, bases }' {filtered_reads} > {metrics_file} && cat {metrics_file}",
+      "inputs": [
+        {
+          "key": "filtered_reads",
+          "label": "Filtered sequences",
+          "type": "file",
+          "required": true,
+          "source_step": "filter_reads",
+          "source_output": "filtered_reads"
+        }
+      ],
+      "outputs": [
+        {
+          "key": "metrics_file",
+          "label": "Sequence metrics",
+          "path": "outputs/metrics.tsv"
+        }
+      ],
+      "dependencies": [
+        "filter_reads"
+      ]
+    },
+    {
+      "id": "write_report",
+      "name": "Write report",
+      "description": "Save the analysis summary in the project outputs.",
+      "working_directory": ".",
+      "command": "cat {metrics_file} > {report_file} && printf 'Analysis complete\\n' && cat {report_file}",
+      "inputs": [
+        {
+          "key": "metrics_file",
+          "label": "Sequence metrics",
+          "type": "file",
+          "required": true,
+          "source_step": "compute_metrics",
+          "source_output": "metrics_file"
+        }
+      ],
+      "outputs": [
+        {
+          "key": "report_file",
+          "label": "Analysis report",
+          "path": "outputs/report.txt"
+        }
+      ],
+      "dependencies": [
+        "compute_metrics"
+      ]
+    }
+  ]
+}

@@ -2,6 +2,50 @@
 
 This file records compatibility and behavior decisions that affect pipeline schemas or user-visible execution.
 
+## 2026-11-12 — Native start page and explicit recent work
+
+**Status:** Accepted; implemented for 0.3.0.
+
+- Bare launch opens a GTK start page with the existing New/Open/Import pipeline,
+  New/Open work, folder browsing and file-editing actions. It is a page in the
+  native window stack, not a new project type or persisted document.
+- The valid last work folder is offered for explicit reopening rather than
+  reopening automatically. The existing `ui.ini` slot, one-hour TTL, validation
+  and invalid-session cleanup are retained. Errors appear inline on the page.
+- Command-line files and folders bypass the start page. Save on the start page
+  does not open a save dialog or write an empty text file; New text reuses the
+  initial blank tab. Existing pipeline/work storage formats are unchanged.
+
+This is the requested launch UX change; it supersedes automatic restoration
+for bare launches while preserving the stored recent-work data.
+
+## 2026-11-05 — Independent registry tools, Marketplace, and Design brush
+
+**Status:** Accepted
+
+- Tools are independent schema-version-1 JSON descriptors maintained in the
+  separate [OPM Registry](https://github.com/ximocm/opm-registry). OPM imports
+  them into its per-user `opm/tools` library (`OPM_TOOLS_DIR` overrides it).
+  No additional working-directory configuration is introduced.
+- Marketplace resolves a public GitHub branch/tag to one immutable commit,
+  validates downloaded definitions, and installs them only on an explicit
+  action. Requests run off the GTK thread with HTTPS, timeouts and size limits.
+  Local JSON import and installed tools work offline. Existing definitions
+  require a visible replacement choice; importing never runs code or installs
+  third-party programs.
+- A Design-only brush expands selected optional groups and file-list counts
+  into ordinary pipeline steps. Step IDs and default output paths are unique;
+  placement uses world coordinates, and Escape restores selection. Work windows
+  retain their existing structural edit restrictions.
+- Placed steps embed commands/declarations and record descriptor version and
+  provenance. Running saved pipelines therefore does not require the registry
+  or tool library, and updating a tool never rewrites existing steps or work.
+- Native pipeline import preserves its graph and layout, with the same explicit
+  naming-conflict behavior as other imports. Pipeline/work envelope version 1
+  remains unchanged because painted steps use the existing step schema.
+
+See [Tools and Marketplace](docs/TOOLS.md) for the user flow.
+
 ## 2026-11-03 — pipeline-storage implementation: native library and `run.json`
 
 **Status:** Accepted; implemented. Supersedes the "implementation pending"

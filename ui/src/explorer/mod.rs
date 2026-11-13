@@ -177,20 +177,24 @@ impl ExplorerPane {
 
         // Cabecera §14.4/§14.5: toggles por ventana + Refresh (P2-13: el
         // MISMO flujo que Project ▸ Refresh, vía el coordinador).
-        let header = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        let header = gtk::Box::new(gtk::Orientation::Vertical, 4);
         header.set_margin_top(4);
         header.set_margin_bottom(4);
         header.set_margin_start(6);
         header.set_margin_end(6);
         let show_all = gtk::CheckButton::with_label("Show All Files");
         let show_hidden = gtk::CheckButton::with_label("Show Hidden Files");
-        let refresh = gtk::Button::with_label("Refresh");
+        let refresh = gtk::Button::from_icon_name("view-refresh-symbolic");
+        refresh.update_property(&[gtk::accessible::Property::Label("Refresh project tree")]);
         refresh.set_tooltip_text(Some("Reload the project tree"));
         refresh.add_css_class("flat");
         refresh.connect_clicked(move |_| on_refresh());
-        header.append(&show_all);
+        let options = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        show_all.set_hexpand(true);
+        options.append(&show_all);
+        options.append(&refresh);
+        header.append(&options);
         header.append(&show_hidden);
-        header.append(&refresh);
         widget.append(&header);
 
         // Menú contextual §14.8 sobre el nodo del click (None = raíz).

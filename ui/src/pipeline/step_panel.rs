@@ -80,15 +80,15 @@ pub struct StepPanel {
 impl StepPanel {
     pub fn new(callbacks: StepCallbacks) -> Rc<Self> {
         let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        content.set_margin_top(10);
-        content.set_margin_bottom(10);
-        content.set_margin_start(10);
-        content.set_margin_end(10);
+        content.set_margin_top(16);
+        content.set_margin_bottom(16);
+        content.set_margin_start(16);
+        content.set_margin_end(16);
 
         let root = gtk::ScrolledWindow::new();
         root.set_child(Some(&content));
         root.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
-        root.set_size_request(300, -1);
+        root.set_size_request(264, -1);
         root.add_css_class("opm-step-panel");
 
         let panel = Rc::new(Self {
@@ -170,6 +170,7 @@ impl StepPanel {
         // Título (el nombre puede cambiar tras editar).
         if let Some(label) = self.name_label.borrow().as_ref() {
             label.set_text(&detail.step.name);
+            label.set_tooltip_text(Some(&detail.step.name));
         }
         // Mensajes de validación por campo.
         let mut fields = self.field_issues.borrow_mut();
@@ -210,11 +211,22 @@ impl StepPanel {
         let Some(detail) = detail else {
             // Estado vacío (§6): dentro de la caja del panel, bajo la
             // cabecera «Step» que fija el layout.
-            let empty = gtk::Label::new(Some("No step selected"));
+            let icon = gtk::Image::from_icon_name("document-properties-symbolic");
+            icon.set_pixel_size(32);
+            icon.set_halign(gtk::Align::Start);
+            icon.set_margin_top(24);
+            self.content.append(&icon);
+            let empty = gtk::Label::new(Some("Select a step"));
             empty.set_halign(gtk::Align::Start);
             empty.set_margin_top(8);
             empty.add_css_class("opm-empty");
             self.content.append(&empty);
+            let hint = gtk::Label::new(Some("Select a card on the canvas to inspect its configuration and validation."));
+            hint.set_wrap(true);
+            hint.set_xalign(0.0);
+            hint.set_margin_top(8);
+            hint.add_css_class("opm-dim");
+            self.content.append(&hint);
             return;
         };
 
@@ -231,6 +243,7 @@ impl StepPanel {
         name.set_xalign(0.0);
         name.set_ellipsize(gtk::pango::EllipsizeMode::End);
         name.add_css_class("opm-step-name");
+        name.set_tooltip_text(Some(&step.name));
         let edit = gtk::Button::with_label("Edit");
         edit.set_tooltip_text(Some("Edit step"));
         edit.set_visible(caps.structural_edit);
@@ -264,11 +277,37 @@ impl StepPanel {
         self.content.append(&pill);
         *self.pill.borrow_mut() = Some((pill, step.id.clone()));
 
+        let id = gtk::Label::new(Some(&step.id));
+        id.set_xalign(0.0);
+        id.set_selectable(true);
+        id.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
+        id.set_tooltip_text(Some(&step.id));
+        id.add_css_class("opm-mono");
+        id.add_css_class("opm-dim");
+        self.content.append(&id);
+        if !step.description.is_empty() {
+            let description = gtk::Label::new(Some(&step.description));
+            description.set_wrap(true);
+            description.set_wrap_mode(gtk::pango::WrapMode::WordChar);
+            description.set_xalign(0.0);
+            description.set_margin_top(8);
+            self.content.append(&description);
+        }
         // Meta: Environment + Command.
-        let meta = gtk::Box::new(gtk::Orientation::Vertical, 2);
+        let meta = gtk::Box::new(gtk::Orientation::Vertical, 8);
+        meta.add_css_class("opm-inspector-section");
         meta.set_margin_bottom(8);
         meta.append(&meta_row("Environment", if step.environment.is_empty() { "default" } else { &step.environment }));
-        meta.append(&meta_row("Command", if step.command.is_empty() { "No command" } else { &step.command }));
+        meta.append(&meta_row("Working directory", if step.working_directory.is_empty() { "Automatic" } else { &step.working_directory }));
+        meta.append(&heading("Command"));
+        let command = gtk::Label::new(Some(if step.command.is_empty() { "No command" } else { &step.command }));
+        command.set_xalign(0.0);
+        command.set_wrap(true);
+        command.set_wrap_mode(gtk::pango::WrapMode::WordChar);
+        command.set_selectable(true);
+        command.add_css_class("opm-mono");
+        command.add_css_class("opm-code-block");
+        meta.append(&command);
         self.content.append(&meta);
 
         // Inputs y Parameters.
@@ -283,7 +322,7 @@ impl StepPanel {
 
         // Outputs.
         let outputs = gtk::Box::new(gtk::Orientation::Vertical, 4);
-        outputs.set_margin_top(8);
+        outputs.add_css_class("opm-inspector-section");
         outputs.append(&heading("Outputs"));
         if step.outputs.is_empty() {
             outputs.append(&empty_label());
@@ -302,7 +341,7 @@ impl StepPanel {
 
         // Validation.
         let validation = gtk::Box::new(gtk::Orientation::Vertical, 4);
-        validation.set_margin_top(8);
+        validation.add_css_class("opm-inspector-section");
         validation.append(&heading("Validation"));
         fill_validation(&validation, &detail.validation);
         self.content.append(&validation);
@@ -329,7 +368,7 @@ impl StepPanel {
         detail: &StepDetail,
     ) -> gtk::Box {
         let section = gtk::Box::new(gtk::Orientation::Vertical, 6);
-        section.set_margin_top(8);
+        section.add_css_class("opm-inspector-section");
         section.append(&heading(title));
         if specs.is_empty() {
             section.append(&empty_label());
@@ -366,6 +405,8 @@ impl StepPanel {
         ));
         label.set_halign(gtk::Align::Start);
         label.set_xalign(0.0);
+        label.set_wrap(true);
+        label.set_wrap_mode(gtk::pango::WrapMode::WordChar);
         field.append(&label);
 
         let commit = {
@@ -384,6 +425,7 @@ impl StepPanel {
                 check.set_active(matches!(value, Value::Bool(true)));
                 check.set_halign(gtk::Align::Start);
                 check.set_sensitive(editable);
+                check.update_property(&[gtk::accessible::Property::Label(label.text().as_str()), gtk::accessible::Property::Required(spec.required)]);
                 {
                     let commit = Rc::clone(&commit);
                     check.connect_toggled(move |check| commit(Value::Bool(check.is_active())));
@@ -395,6 +437,7 @@ impl StepPanel {
                 let dropdown = gtk::DropDown::from_strings(&options);
                 dropdown.set_halign(gtk::Align::Start);
                 dropdown.set_sensitive(editable);
+                dropdown.update_property(&[gtk::accessible::Property::Label(label.text().as_str()), gtk::accessible::Property::Required(spec.required)]);
                 // El valor actual puede no estar en las opciones (sin
                 // default): se muestra la primera sin commitear hasta que
                 // el usuario elija (paridad SPA: sin onChange no hay commit).
@@ -423,6 +466,7 @@ impl StepPanel {
                 entry.set_text(&value_to_text(value));
                 entry.set_hexpand(true);
                 entry.set_sensitive(editable);
+                entry.update_property(&[gtk::accessible::Property::Label(label.text().as_str()), gtk::accessible::Property::Required(spec.required)]);
                 if let (Some(min), Some(max)) = (spec.min, spec.max) {
                     entry.set_tooltip_text(Some(&format!("min: {min}, max: {max}")));
                 } else if let Some(min) = spec.min {
@@ -482,16 +526,17 @@ impl StepPanel {
 
 /// Fila `Etiqueta <code valor>` de la meta.
 fn meta_row(name: &str, value: &str) -> gtk::Box {
-    let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    let row = gtk::Box::new(gtk::Orientation::Vertical, 4);
     let label = gtk::Label::new(Some(name));
     label.set_halign(gtk::Align::Start);
-    label.set_size_request(110, -1);
     label.add_css_class("opm-dim");
     let value_label = gtk::Label::new(Some(value));
     value_label.set_halign(gtk::Align::Start);
     value_label.set_xalign(0.0);
     value_label.set_hexpand(true);
-    value_label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    value_label.set_wrap(true);
+    value_label.set_wrap_mode(gtk::pango::WrapMode::WordChar);
+    value_label.set_selectable(true);
     value_label.set_tooltip_text(Some(value));
     value_label.add_css_class("opm-mono");
     row.append(&label);
@@ -575,8 +620,9 @@ fn fill_validation(box_: &gtk::Box, issues: &[ValidationIssue]) {
     while let Some(child) = box_.first_child() {
         box_.remove(&child);
     }
+    box_.append(&heading("Validation"));
     if issues.is_empty() {
-        let label = gtk::Label::new(Some("Clear"));
+        let label = gtk::Label::new(Some("No validation issues"));
         label.set_halign(gtk::Align::Start);
         label.add_css_class("opm-empty");
         box_.append(&label);
@@ -587,6 +633,7 @@ fn fill_validation(box_: &gtk::Box, issues: &[ValidationIssue]) {
         label.set_halign(gtk::Align::Start);
         label.set_xalign(0.0);
         label.set_wrap(true);
+        label.set_wrap_mode(gtk::pango::WrapMode::WordChar);
         label.add_css_class(match issue.severity {
             opm_pipeline::IssueSeverity::Blocker => "opm-issue-blocker",
             opm_pipeline::IssueSeverity::Warning => "opm-issue-warning",

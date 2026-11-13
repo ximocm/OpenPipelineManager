@@ -35,6 +35,7 @@ packaged build stages both files.
 | gtk4 | MIT | Copyright (c) the gtk-rs team | https://github.com/gtk-rs/gtk4-rs |
 | glib / gio / gdk4 / pango / cairo-rs / graphene-rs | MIT | Copyright (c) the gtk-rs team | https://github.com/gtk-rs/gtk-rs-core |
 | directories | MIT OR Apache-2.0 | Copyright (c) 2018 dirs-rs contributors | https://github.com/soc/directories-rs |
+| ureq | MIT OR Apache-2.0 | Upstream ureq authors' license and copyright notices | https://github.com/algesten/ureq |
 
 ## Notable transitive dependencies
 

@@ -6,23 +6,34 @@ The format follows Keep a Changelog-style sections, and the project uses semanti
 
 ## Unreleased
 
-### Changed
-
-- Replaced the project persistence format with the pipeline-storage design: reusable pipelines are now named `<name>.pipeline` documents (UTF-8 JSON, `format_version: 1`) in the application library, and each working folder keeps one `.pipeline-manager/run.json` with the definition snapshot, values, and step state. Designing works without a work folder; work folders no longer contain `project.config.json`, `config.txt`, `pipeline.project.json`, or the separate `params`/`state`/`visual-layout`/`validation` runtime files. This is a clean break: old test projects are not read or migrated (see `docs/PIPELINE_STORAGE.md` and `DECISIONS.md`). The project version is now 0.3.0 for the next release.
-- Replaced the three old sample pipeline definitions with one self-contained `examples/first-run.json` and a fresh-work walkthrough. Recorded that the planned storage replacement needs no backward compatibility or migration for disposable test projects; the application persistence format is not changed yet.
-- Updated the desktop dependencies to GTK4 bindings 0.11.5, pulldown-cmark 0.13.6, and serde_yml 0.0.13, keeping the core and UI lockfiles aligned for reproducible builds. The project version is now 0.2.1 for the next release.
-- Updated GitHub Actions checkout, cache, and artifact actions; pinned the sync workflow checkout to the same reviewed commit as CI and releases.
-- Grouped Dependabot updates for shared Rust dependencies across core and UI, and grouped workflow action updates to avoid fragmented dependency pull requests.
+## 0.3.0 - 2026-11-12
 
 ### Added
 
-- Library and work flows: New/Open pipeline with Save and Save As (naming conflicts always require an explicit choice), Import/Export as YAML/JSON sharing formats, New work/Open work from a library pipeline and a working directory, and an explicit Update from library action that reconciles values and invalidates completion state only for changed steps. The library location (`OPM_PIPELINES_DIR` or the per-OS data directory) is surfaced in the app.
+- Native start page with Open/New/Import pipeline, Open/New work folder, folder browsing, file actions, and an explicit recent-work shortcut. Launching with a file or folder argument still opens it directly.
+- A screenshot gallery and refreshed README, using real GTK windows and a reproducible four-step sequence-analysis demo. Added an isolated capture script for light and dark themes.
+- Tools and Pipeline Marketplace for browsing the public OPM Registry, importing local tool JSON, installing native pipelines, and explicitly updating installed definitions. Installed tools remain available offline; importing a definition does not install its external program or execute it.
+- Searchable, collapsible Tools palette and repeatable canvas brush. Each placed step embeds its command, declarations, unique ID, output paths, tool version and provenance. Optional arguments and input counts are configured before placement; Escape returns to selection.
+- Native pipeline library and Design/Work flows: New/Open/Save/Save As, YAML/JSON import and export, New/Open work, and explicit Update from library with value reconciliation and completion-state invalidation for changed steps.
+- Canvas keyboard selection, run check toggling, pan, zoom and Fit; four functional connection ports support both vertical and horizontal workflows.
+- Log Follow and Wrap controls, accessible control names, inline field validation, and reproducible visual review sessions.
+
+### Changed
+
+- Refined the native GTK4 workspace with quieter panes, theme-aware cards and continuous links, distinct arrowheads, a grouped inspector and a scrollable step configuration dialog. Narrow windows and large text keep controls reachable through scrolling.
+- Bare launch now presents the start page. Valid recent work is offered for explicit reopening using the existing one-hour session window, instead of opening automatically.
+- Default step placement advances top-to-bottom; explicit saved layouts continue to support either orientation. Links choose facing ports from node positions without new orientation metadata.
+- Replaced project persistence with named UTF-8 JSON `.pipeline` library documents and a single `.pipeline-manager/run.json` snapshot per work folder (`format_version: 1`). Runtime logs and completion artifacts remain separate. Library changes are adopted explicitly. **This is a clean break:** legacy project markers and separate params/state/layout files are not read or migrated.
+- Replaced the old sample definitions with the self-contained `examples/first-run.json` and its fresh-work walkthrough.
+- Updated GTK4 bindings to 0.11.5, pulldown-cmark to 0.13.6, and serde_yml to 0.0.13; added the ureq/Rustls HTTPS client for public registry browsing. Core and UI lockfiles remain aligned.
+- Updated and pinned CI actions, grouped Dependabot updates, and documented the main-to-dev synchronization flow and automation token.
 
 ### Fixed
 
-- `File > Save` and `Ctrl+S` now dispatch by the visible page (like `Close Tab`): in a Design window the Pipeline page saves the design document to the library instead of silently routing to the active text tab and generating an `untitled*.txt`; images and the read-only Pipeline page of work windows have nothing to save.
-- Adapted YAML model deserialization to the updated parser while preserving pipeline aliases, quoted boolean values, non-finite numeric validation, and invalid-document errors.
-- Made cancellation test commands replace their shell process so CI does not intermittently wait on an unsupported descendant process holding an output pipe open.
+- File > Save and Ctrl+S dispatch by the visible page: Design saves its native pipeline; images, read-only Work pipeline views and the start page do not create empty text files.
+- YAML deserialization retains pipeline aliases, quoted boolean values, non-finite numeric validation and clear invalid-document errors after dependency updates.
+- Stale dependency selection no longer retains an active borrow during graph refresh; port hit testing chooses the nearest card where hit areas overlap.
+- Cancellation test commands replace their shell process so unsupported descendants do not intermittently hold output pipes open in CI.
 
 ## 0.2.0 - 2026-11-02
 
