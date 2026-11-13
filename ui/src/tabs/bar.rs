@@ -55,7 +55,7 @@ impl TabBar {
             let button = gtk::Button::with_label(&manager.title(index));
             if index == manager.active_index() && editor_focused {
                 // §37: el tab activo va resaltado.
-                button.add_css_class("suggested-action");
+                button.add_css_class("opm-active-tab");
             }
             let on_select = Rc::clone(&self.on_select);
             button.connect_clicked(move |_| on_select(index));

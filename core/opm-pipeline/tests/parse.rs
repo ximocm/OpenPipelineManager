@@ -239,6 +239,44 @@ steps:
     }
 }
 
+#[test]
+fn yaml_aliases_preserve_values_and_ignore_unknown_fields() {
+    let pipeline = parse_pipeline(
+        "pipeline.yml",
+        r#"
+shared: &settings
+  key: enabled
+  type: boolean
+  default: "false"
+  extension: {nested: [1, 2]}
+steps:
+  - id: a
+    name: A
+    parameters: [*settings]
+  - id: b
+    name: B
+    parameters: [*settings]
+"#,
+    )
+    .expect("aliases and unknown fields remain supported");
+
+    assert_eq!(pipeline.steps.len(), 2);
+    for step in &pipeline.steps {
+        let parameter = &step.parameters[0];
+        assert_eq!(parameter.kind, FieldType::Boolean);
+        assert_eq!(parameter.default, Some(Value::Str("false".to_string())));
+    }
+}
+
+#[test]
+fn invalid_yaml_syntax_and_model_shapes_return_yaml_errors() {
+    for text in ["steps: [", "steps: wrong", "steps: [{id: [a], name: A}]"] {
+        let err = parse_pipeline("pipeline.yaml", text).expect_err("invalid pipeline rejected");
+        assert!(matches!(err, ParseError::Yaml(_)), "{err:?}");
+        assert!(!err.to_string().is_empty());
+    }
+}
+
 /// Round-trip: a serialized pipeline reparses to an equal config (Python
 /// `model_validate(model_dump(...))`).
 #[test]

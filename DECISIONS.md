@@ -2,6 +2,126 @@
 
 This file records compatibility and behavior decisions that affect pipeline schemas or user-visible execution.
 
+## 2026-11-12 — Native start page and explicit recent work
+
+**Status:** Accepted; implemented for 0.3.0.
+
+- Bare launch opens a GTK start page with the existing New/Open/Import pipeline,
+  New/Open work, folder browsing and file-editing actions. It is a page in the
+  native window stack, not a new project type or persisted document.
+- The valid last work folder is offered for explicit reopening rather than
+  reopening automatically. The existing `ui.ini` slot, one-hour TTL, validation
+  and invalid-session cleanup are retained. Errors appear inline on the page.
+- Command-line files and folders bypass the start page. Save on the start page
+  does not open a save dialog or write an empty text file; New text reuses the
+  initial blank tab. Existing pipeline/work storage formats are unchanged.
+
+This is the requested launch UX change; it supersedes automatic restoration
+for bare launches while preserving the stored recent-work data.
+
+## 2026-11-05 — Independent registry tools, Marketplace, and Design brush
+
+**Status:** Accepted
+
+- Tools are independent schema-version-1 JSON descriptors maintained in the
+  separate [OPM Registry](https://github.com/ximocm/opm-registry). OPM imports
+  them into its per-user `opm/tools` library (`OPM_TOOLS_DIR` overrides it).
+  No additional working-directory configuration is introduced.
+- Marketplace resolves a public GitHub branch/tag to one immutable commit,
+  validates downloaded definitions, and installs them only on an explicit
+  action. Requests run off the GTK thread with HTTPS, timeouts and size limits.
+  Local JSON import and installed tools work offline. Existing definitions
+  require a visible replacement choice; importing never runs code or installs
+  third-party programs.
+- A Design-only brush expands selected optional groups and file-list counts
+  into ordinary pipeline steps. Step IDs and default output paths are unique;
+  placement uses world coordinates, and Escape restores selection. Work windows
+  retain their existing structural edit restrictions.
+- Placed steps embed commands/declarations and record descriptor version and
+  provenance. Running saved pipelines therefore does not require the registry
+  or tool library, and updating a tool never rewrites existing steps or work.
+- Native pipeline import preserves its graph and layout, with the same explicit
+  naming-conflict behavior as other imports. Pipeline/work envelope version 1
+  remains unchanged because painted steps use the existing step schema.
+
+See [Tools and Marketplace](docs/TOOLS.md) for the user flow.
+
+## 2026-11-03 — pipeline-storage implementation: native library and `run.json`
+
+**Status:** Accepted; implemented. Supersedes the "implementation pending"
+status of the entry below and resolves its three open choices.
+
+### Context
+
+The pipeline library and storage proposal (`docs/PIPELINE_STORAGE.md`) fixed the
+direction but left three choices open: the native document encoding, the
+application library location, and the update/adopt semantics. Implementation
+could not start without settling them.
+
+### Decisions
+
+- **Native encoding:** UTF-8 JSON under the `.pipeline` extension with a
+  versioned envelope (`format_version: 1`). YAML and JSON remain import/export
+  formats only, never companion files. Alternative considered: YAML as the
+  native document — rejected to avoid encoding guessing and dual-file sync.
+- **Library location:** `OPM_PIPELINES_DIR` when set (portable builds, tests),
+  otherwise the per-OS data directory via the `directories` crate
+  (`~/.local/share/opm/pipelines`, `%APPDATA%\opm\pipelines`,
+  `~/Library/Application Support/opm/pipelines`), otherwise a temp fallback.
+  Never derived from the launch working directory; the location is surfaced in
+  the app. Alternative considered: executable-adjacent `pipelines/` — rejected
+  because installed executables may live in read-only locations.
+- **Update semantics:** adopting a revised library definition is explicit
+  ("Update from library"); parameter/input values survive only for keys still
+  declared, and a step whose definition fingerprint changed (command,
+  environment, working directory, inputs, outputs, parameters, dependencies)
+  loses its `.done` marker and returns to `pending`. Removed steps are pruned
+  entirely. Saving work never rewrites the library document.
+
+### Consequences
+
+- Work folders carry their own definition snapshot in `.pipeline-manager/run.json`
+  and remain openable if the library file moves, changes, or disappears.
+- The project marker, `config.txt`, `pipeline.project.json`, and the separate
+  `params`/`state`/`visual-layout`/`validation` runtime files are gone; a failed
+  save leaves the previous complete document readable (atomic writes).
+- Unsupported `format_version` values are rejected with a visible error and
+  never clobber the file.
+
+## 2026-11-03 — Pipeline library and consolidated work persistence
+
+**Status:** Proposed; implementation pending. The application still uses the
+current persistence format; its replacement will be a clean break.
+
+### Context
+
+Reusable pipeline design is currently tied to a project folder. Project metadata,
+the imported pipeline snapshot, and runtime JSON files create several documents,
+with parameters and state duplicated between them. Source definitions and manual
+exports add more visible files without a clear single document to edit.
+
+### Proposed direction
+
+- Keep named reusable pipelines in the application's `pipelines/` library and
+  separate Design from Execution. Designing must work without a work folder.
+- Use one native `<name>.pipeline` document; retain YAML/JSON import and export.
+- Use one `.pipeline-manager/run.json` support document per work folder for the
+  execution snapshot, values, and state. Keep logs and completion artifacts separate.
+- Stop generating `config.txt`, the separate project marker, and redundant
+  snapshot/runtime configuration files once the replacement is implemented.
+- Existing projects are disposable tests: no backward compatibility, legacy
+  reader, or migration tooling is required. Replace the old test setup with one
+  example created from scratch.
+- Library edits must never silently change the definition used by work created
+  with the new format.
+
+The [storage proposal](docs/PIPELINE_STORAGE.md) records the current file roles,
+target structure, implementation plan, acceptance criteria, and unresolved choices
+(native encoding, installed application library location, and update semantics).
+This entry records future work and does not change the current on-disk schema.
+Once implemented, the clean break supersedes the project persistence
+compatibility requirement in the 2026-10-27 stack migration decision below.
+
 ## 2026-08-20 — Optional output keys and unique placeholder names
 
 **Status:** Accepted

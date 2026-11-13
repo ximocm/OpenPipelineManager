@@ -1,0 +1,62 @@
+{
+  "steps": [
+    {
+      "id": "create_message",
+      "name": "Create message",
+      "description": "Generate a small input file without downloads or external scripts.",
+      "command": "printf '%s\\n' {message} > {message_file}",
+      "working_directory": ".",
+      "outputs": [
+        {
+          "key": "message_file",
+          "label": "Generated message",
+          "path": "Input/message.txt"
+        }
+      ],
+      "parameters": [
+        {
+          "key": "message",
+          "label": "Message",
+          "type": "text",
+          "required": true,
+          "default": "Hello from Open Pipeline Manager"
+        }
+      ]
+    },
+    {
+      "id": "write_report",
+      "name": "Write report",
+      "description": "Read the previous step's output and append the chosen report mode.",
+      "command": "cat {message_file} > {report_file} && printf 'mode=%s\\n' {mode} >> {report_file}",
+      "working_directory": ".",
+      "inputs": [
+        {
+          "key": "message_file",
+          "label": "Generated message",
+          "type": "file",
+          "required": true,
+          "source_step": "create_message",
+          "source_output": "message_file"
+        }
+      ],
+      "outputs": [
+        {
+          "key": "report_file",
+          "label": "Report",
+          "path": "outputs/report.txt"
+        }
+      ],
+      "parameters": [
+        {
+          "key": "mode",
+          "label": "Report mode",
+          "type": "select",
+          "required": true,
+          "default": "demo",
+          "options": ["demo", "review"]
+        }
+      ],
+      "dependencies": ["create_message"]
+    }
+  ]
+}

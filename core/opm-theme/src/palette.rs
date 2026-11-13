@@ -18,6 +18,9 @@ pub struct Palette {
     pub code_bg: &'static str,
     pub rule: &'static str,
     pub quote: &'static str,
+    /// Output flow and editable dependency links on the native canvas.
+    pub output_link: &'static str,
+    pub dependency_link: &'static str,
     /// Colores por nombre: paletas física y semántica (§23).
     pub colors: &'static [(&'static str, &'static str)],
 }
@@ -33,11 +36,11 @@ const LIGHT_COLORS: &[(&str, &str)] = &[
     ("black", "#1f2328"),
     ("white", "#ffffff"),
     ("danger", "#c62828"),
-    ("warning", "#e65100"),
+    ("warning", "#9a5000"),
     ("success", "#2e7d32"),
     ("info", "#0277bd"),
     ("note", "#455a64"),
-    ("muted", "#757575"),
+    ("muted", "#57606a"),
     ("highlight", "#fff59d"),
     ("accent", "#1565c0"),
 ];
@@ -52,14 +55,14 @@ const DARK_COLORS: &[(&str, &str)] = &[
     ("gray", "#9e9e9e"),
     ("black", "#e6e6e6"),
     ("white", "#15181c"),
-    ("danger", "#ef5350"),
-    ("warning", "#ffa726"),
-    ("success", "#66bb6a"),
+    ("danger", "#ff8c86"),
+    ("warning", "#ffc078"),
+    ("success", "#82cf8a"),
     ("info", "#29b6f6"),
     ("note", "#90a4ae"),
-    ("muted", "#9e9e9e"),
+    ("muted", "#a9b4bf"),
     ("highlight", "#5d4a1f"),
-    ("accent", "#42a5f5"),
+    ("accent", "#78b8ff"),
 ];
 
 impl Palette {
@@ -67,10 +70,12 @@ impl Palette {
     pub const LIGHT: Self = Self {
         bg: "#ffffff",
         fg: "#1f2328",
-        muted: "#6b7280",
+        muted: "#57606a",
         code_bg: "#f6f8fa",
         rule: "#d0d7de",
         quote: "#57606a",
+        output_link: "#0f766e",
+        dependency_link: "#7440b8",
         colors: LIGHT_COLORS,
     };
 
@@ -78,10 +83,12 @@ impl Palette {
     pub const DARK: Self = Self {
         bg: "#15181c",
         fg: "#e6e6e6",
-        muted: "#9aa4af",
+        muted: "#a9b4bf",
         code_bg: "#1f2429",
-        rule: "#3a4048",
+        rule: "#46515d",
         quote: "#9aa4af",
+        output_link: "#64d8cb",
+        dependency_link: "#c4a0ff",
         colors: DARK_COLORS,
     };
 

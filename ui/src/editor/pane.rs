@@ -359,6 +359,22 @@ impl EditorPane {
         self.root.clone().upcast::<Widget>()
     }
 
+    /// Restyle existing tags without replacing text, selection or undo state.
+    pub fn set_palette(&self, palette: &Palette) {
+        for (&kind, tag) in tags::all_kinds().iter().zip(&self.tags) {
+            apply_tag_style(tag, &tags::tag_style(kind, palette));
+        }
+        for (&role, tag) in tags::all_syn_roles().iter().zip(&self.syn_tags) {
+            apply_tag_style(tag, &tags::syn_tag_style(role, palette));
+        }
+        for (style, tag) in &self.vis_tags {
+            apply_tag_style(tag, &visual::tag_style(*style, palette));
+        }
+        self.find_match.set_background(palette.color("highlight"));
+        self.find_active.set_background(palette.color("orange"));
+        self.find_active.set_foreground(Some(palette.bg));
+    }
+
     /// Sincroniza la vista con el documento activo (cambio de tab o de modo,
     /// open, undo/redo): carga el texto en el TextBuffer, fija la fuente de
     /// highlighting por extensión (§5) y repinta el plan del modo activo.

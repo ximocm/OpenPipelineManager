@@ -1,15 +1,14 @@
 //! Behavior ports of `backend/tests/test_project_tree.py` and the relevant
 //! parts of `backend/tests/test_file_upload_api.py` into Rust (no HTTP
-//! wiring): scaffold, step folders, guarded file ops and their error kinds,
+//! wiring): step folders, guarded file ops and their error kinds,
 //! batch-import preflight/rollback, tree depth cap + ordering and preview
 //! classification.
 
 use opm_fs::{
-    build_tree, create_project_path, delete_project_path, ensure_project_scaffold,
-    ensure_step_folders, import_files, list_directories, list_filesystem, list_tree_children,
-    move_project_path, preview_file, rename_project_path, validate_project_folder,
-    write_project_file, FilePreview, ImportSource, OpsError, PathError, TreeKind, TreeNode,
-    IGNORED_NAMES, PROJECT_CONFIG_FILENAME,
+    build_tree, create_project_path, delete_project_path, ensure_step_folders, import_files,
+    list_directories, list_filesystem, list_tree_children, move_project_path, preview_file,
+    rename_project_path, write_project_file, FilePreview, ImportSource, OpsError, PathError,
+    TreeKind, TreeNode, IGNORED_NAMES,
 };
 use std::fs;
 use std::io::ErrorKind;
@@ -54,11 +53,15 @@ impl Drop for TestDir {
     }
 }
 
-/// Proyecto scaffoldeado + su raíz canónica (igual que la que devuelven las
-/// operaciones resueltas).
+/// Raíz de prueba con las carpetas de trabajo (`Input/`, `steps/`,
+/// `outputs/`). El scaffold de una carpeta de trabajo es
+/// `opm_store::ProjectStore::create_work` (escribe SOLO `run.json`); aquí
+/// solo hacen falta las carpetas que las ops bajo prueba esperan encontrar.
 fn project(prefix: &str) -> (TestDir, PathBuf) {
     let dir = TestDir::new(prefix);
-    ensure_project_scaffold(dir.path(), "demo").unwrap();
+    for dirname in ["Input", "steps", "outputs"] {
+        fs::create_dir(dir.path().join(dirname)).unwrap();
+    }
     let root = fs::canonicalize(dir.path()).unwrap();
     (dir, root)
 }
@@ -107,56 +110,7 @@ fn find<'a>(node: &'a TreeNode, path: &str) -> &'a TreeNode {
     current
 }
 
-// ---------------------------------------------------------------- scaffold --
-
-#[test]
-fn scaffold_creates_workspace_dirs_and_config() {
-    let dir = TestDir::new("scaffold");
-    ensure_project_scaffold(dir.path(), "My Pipeline").unwrap();
-
-    assert!(dir.path().join("Input").is_dir());
-    assert!(dir.path().join("steps").is_dir());
-    assert!(dir.path().join("outputs").is_dir());
-    assert!(dir.path().join("config.txt").is_file());
-    assert!(dir.path().join(PROJECT_CONFIG_FILENAME).is_file());
-
-    let config = fs::read_to_string(dir.path().join(PROJECT_CONFIG_FILENAME)).unwrap();
-    assert!(config.contains("\"name\": \"My Pipeline\""));
-    assert!(config.contains("\"version\": 1"));
-    assert!(config.contains("\"created_at\": \""));
-    assert!(config.contains("\"input\": \"Input\""));
-    assert!(config.contains("\"steps\": \"steps\""));
-    assert!(config.contains("\"outputs\": \"outputs\""));
-
-    let config_txt = fs::read_to_string(dir.path().join("config.txt")).unwrap();
-    assert!(config_txt.starts_with("Open Pipeline Manager project\n"));
-
-    // create-if-absent: un segundo scaffold no pisa el contenido del usuario.
-    fs::write(dir.path().join("config.txt"), "sentinel").unwrap();
-    ensure_project_scaffold(dir.path(), "Other").unwrap();
-    assert_eq!(
-        fs::read_to_string(dir.path().join("config.txt")).unwrap(),
-        "sentinel"
-    );
-    let config = fs::read_to_string(dir.path().join(PROJECT_CONFIG_FILENAME)).unwrap();
-    assert!(config.contains("\"name\": \"My Pipeline\""));
-}
-
-#[test]
-fn validate_requires_project_folder_and_config() {
-    let dir = TestDir::new("validate");
-    // Carpeta sin project.config.json → NotAProject (Python ValueError).
-    let err = validate_project_folder(dir.path()).unwrap_err();
-    assert!(matches!(err, OpsError::NotAProject), "{err:?}");
-    assert!(err.to_string().contains(PROJECT_CONFIG_FILENAME));
-
-    ensure_project_scaffold(dir.path(), "demo").unwrap();
-    validate_project_folder(dir.path()).unwrap();
-
-    // Inexistente → NotFound (Python FileNotFoundError).
-    let err = validate_project_folder(&dir.path().join("ghost")).unwrap_err();
-    assert!(matches!(err, OpsError::NotFound { .. }), "{err:?}");
-}
+// ---------------------------------------------------------- step folders --
 
 #[test]
 fn step_folders_created_from_ids() {

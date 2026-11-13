@@ -284,6 +284,54 @@ pub async fn confirm_message(
     matches!(dialog.choose_future(Some(parent)).await, Ok(0))
 }
 
+/// §12.7 / pipeline-storage: elección explícita ante un nombre de librería
+/// ya ocupado (nunca sobrescritura silenciosa; patrón de
+/// [`confirm_overwrite_external`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NameConflict {
+    /// El documento del usuario pisa el de la librería (consentimiento
+    /// explícito).
+    Overwrite,
+    /// Guardar bajo OTRO nombre (vuelve a empezar el prompt).
+    SaveAs,
+    /// Nada cambia.
+    Cancel,
+}
+
+/// Un `<name>.pipeline` ya existe: el usuario elige de forma explícita
+/// entre sobrescribir, guardar con otro nombre o cancelar.
+pub async fn confirm_name_conflict(parent: &impl IsA<gtk::Window>, name: &str) -> NameConflict {
+    let detail = format!(
+        "A pipeline named {name} already exists in the library. \
+         Overwrite replaces it, or save the document under another name."
+    );
+    let dialog = gtk::AlertDialog::builder()
+        .message("Pipeline name already exists")
+        .detail(detail)
+        .buttons(["Overwrite", "Save as", "Cancel"])
+        .default_button(2)
+        .cancel_button(2)
+        .build();
+    let parent = parent.upcast_ref::<gtk::Window>();
+    match dialog.choose_future(Some(parent)).await {
+        Ok(0) => NameConflict::Overwrite,
+        Ok(1) => NameConflict::SaveAs,
+        _ => NameConflict::Cancel,
+    }
+}
+
+/// Mensaje informativo de UN botón (p. ej. el informe de «Update from
+/// library»: toda acción de la UI es explícita y observable, §3.7).
+pub async fn info_message(parent: &impl IsA<gtk::Window>, message: &str, detail: &str) {
+    let dialog = gtk::AlertDialog::builder()
+        .message(message)
+        .detail(detail)
+        .buttons(["OK"])
+        .build();
+    let parent = parent.upcast_ref::<gtk::Window>();
+    let _ = dialog.choose_future(Some(parent)).await;
+}
+
 /// Prompt de texto modal para operaciones del explorador (§14.8): nombre de
 /// archivo/carpeta, nuevo nombre en `Rename` o destino en `Move`.
 ///
@@ -356,8 +404,7 @@ pub fn prompt_text(
     window.present();
 }
 
-/// Filtro de ficheros de pipeline (`.yml`, `.yaml`, `.json`) para importar
-/// y exportar (§6: `project/` necesita estos selectores).
+/// Filtro de formatos de intercambio (`.yml`, `.yaml`, `.json`) para exportar.
 pub fn pipeline_filter() -> gtk::FileFilter {
     let filter = gtk::FileFilter::new();
     filter.set_name(Some("Pipeline (*.yml, *.yaml, *.json)"));
@@ -378,13 +425,13 @@ pub async fn open_pipeline(parent: &impl IsA<gtk::Window>) -> Option<PathBuf> {
     dialog.set_modal(true);
 
     let filters = gio::ListStore::new::<gtk::FileFilter>();
-    filters.append(&pipeline_filter());
+    filters.append(&definition_filter());
     let all = gtk::FileFilter::new();
     all.set_name(Some("Todos los archivos"));
     all.add_pattern("*");
     filters.append(&all);
     dialog.set_filters(Some(&filters));
-    dialog.set_default_filter(Some(&pipeline_filter()));
+    dialog.set_default_filter(Some(&definition_filter()));
 
     let parent = parent.upcast_ref::<gtk::Window>();
     let file = dialog.open_future(Some(parent)).await.ok()?;
@@ -408,5 +455,38 @@ pub async fn save_pipeline(parent: &impl IsA<gtk::Window>, suggested: &str) -> O
 
     let parent = parent.upcast_ref::<gtk::Window>();
     let file = dialog.save_future(Some(parent)).await.ok()?;
+    file.path()
+}
+
+/// Filtro de definiciones compartidas: documentos nativos `.pipeline` más
+/// los formatos de intercambio YAML/JSON.
+pub fn definition_filter() -> gtk::FileFilter {
+    let filter = gtk::FileFilter::new();
+    filter.set_name(Some("Pipeline documents (*.pipeline, *.yml, *.yaml, *.json)"));
+    for pattern in ["*.pipeline", "*.yml", "*.yaml", "*.json"] {
+        filter.add_pattern(pattern);
+    }
+    filter.add_mime_type("application/json");
+    filter
+}
+
+/// Selector de fichero de definición para «Update from library» cuando el
+/// `source` de `run.json` ya no resuelve en la librería (fallback: fichero
+/// `.pipeline` nativo o YAML/JSON importado). `None` al cancelar.
+pub async fn open_definition(parent: &impl IsA<gtk::Window>) -> Option<PathBuf> {
+    let dialog = gtk::FileDialog::new();
+    dialog.set_title("Select pipeline definition");
+    dialog.set_modal(true);
+    let filters = gio::ListStore::new::<gtk::FileFilter>();
+    filters.append(&definition_filter());
+    let all = gtk::FileFilter::new();
+    all.set_name(Some("All files"));
+    all.add_pattern("*");
+    filters.append(&all);
+    dialog.set_filters(Some(&filters));
+    dialog.set_default_filter(Some(&definition_filter()));
+
+    let parent = parent.upcast_ref::<gtk::Window>();
+    let file = dialog.open_future(Some(parent)).await.ok()?;
     file.path()
 }

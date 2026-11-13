@@ -1,0 +1,114 @@
+{
+  "schema_version": 1,
+  "id": "cutadapt-single",
+  "version": "0.1.0",
+  "name": "Cutadapt single-end",
+  "description": "Trim adapters, fixed bases and low-quality ends; optionally filter by length.",
+  "executable": "cutadapt",
+  "homepage": "https://cutadapt.readthedocs.io/",
+  "version_arguments": [
+    "--version"
+  ],
+  "inputs": {
+    "reads": {
+      "type": "file",
+      "description": "Single-end FASTQ input.",
+      "required": true
+    }
+  },
+  "parameters": {
+    "threads": {
+      "type": "integer",
+      "description": "Number of worker threads.",
+      "required": false,
+      "min": 1,
+      "max": 64,
+      "default": 1
+    },
+    "adapter3": {
+      "type": "text",
+      "description": "Optional 3-prime adapter sequence; passed to -a.",
+      "required": false
+    },
+    "adapter5": {
+      "type": "text",
+      "description": "Optional 5-prime adapter sequence; passed to -g.",
+      "required": false
+    },
+    "quality": {
+      "type": "integer",
+      "description": "Phred cutoff for 3-prime quality trimming.",
+      "required": false,
+      "min": 0,
+      "max": 93,
+      "default": 0
+    },
+    "cut": {
+      "type": "integer",
+      "description": "Remove bases: positive from 5-prime, negative from 3-prime.",
+      "required": false,
+      "default": 0
+    },
+    "min_length": {
+      "type": "integer",
+      "description": "Minimum retained read length.",
+      "required": false,
+      "min": 0,
+      "default": 0
+    },
+    "max_length": {
+      "type": "integer",
+      "description": "Optional maximum retained read length.",
+      "required": false,
+      "min": 1
+    }
+  },
+  "outputs": {
+    "trimmed": {
+      "type": "file",
+      "description": "Trimmed FASTQ.",
+      "required": true
+    },
+    "report": {
+      "type": "file",
+      "description": "Text trimming report.",
+      "required": true
+    }
+  },
+  "arguments": [
+    "--cores",
+    "{threads}",
+    {
+      "when": "adapter3",
+      "args": [
+        "-a",
+        "{adapter3}"
+      ]
+    },
+    {
+      "when": "adapter5",
+      "args": [
+        "-g",
+        "{adapter5}"
+      ]
+    },
+    "-q",
+    "{quality}",
+    "-u",
+    "{cut}",
+    "-m",
+    "{min_length}",
+    {
+      "when": "max_length",
+      "args": [
+        "-M",
+        "{max_length}"
+      ]
+    },
+    "-o",
+    "{trimmed}",
+    "{reads}"
+  ],
+  "stdout": "report",
+  "tested_software_version": "5.2"
+}

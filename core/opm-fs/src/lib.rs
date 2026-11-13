@@ -2,7 +2,7 @@
 //! Filesystem of Open Pipeline Manager: file I/O over the editor buffer
 //! ([`LocalFs`] implements [`FileStore`]), atomic saves, safe project-relative
 //! path resolution ([`resolve_pipeline_path`] family) and the project
-//! operations (scaffold, guarded file ops, batch import, tree/preview/list)
+//! operations (guarded file ops, batch import, tree/preview/list)
 //! ported from the Python backend.
 //!
 //! Promises kept from the storage core:
@@ -24,12 +24,11 @@ mod test_dir;
 pub use atomic::{stage_write, write_atomic, StagedWrite};
 pub use local::{FileStamp, LocalFs};
 pub use ops::{
-    build_tree, create_project_path, delete_project_path, ensure_project_scaffold,
-    ensure_step_folders, force_case_insensitive_destinations, import_files, list_directories,
-    list_filesystem, list_tree_children, move_project_path, preview_file, rename_project_path,
-    safe_segment, validate_project_folder, write_project_file, DirectoryEntry, DirectoryList,
-    FilePreview, FilesystemList, ImportSource, OpsError, TreeKind, TreeNode,
-    IGNORED_NAMES, PROJECT_CONFIG_FILENAME,
+    build_tree, create_project_path, delete_project_path, ensure_step_folders,
+    force_case_insensitive_destinations, import_files, list_directories, list_filesystem,
+    list_tree_children, move_project_path, preview_file, rename_project_path, safe_segment,
+    write_project_file, DirectoryEntry, DirectoryList, FilePreview, FilesystemList, ImportSource,
+    OpsError, TreeKind, TreeNode, IGNORED_NAMES,
 };
 pub use paths::{canonicalize, read_dir_entries, resolve_in_project, walk_tree, TreeEntry};
 pub use pipeline_paths::{

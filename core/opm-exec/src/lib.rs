@@ -648,6 +648,8 @@ mod tests {
     // ----------------------------------------- long chains (F8, iteratividad)
 
     use super::{ExecError, ProjectStore, topological_subset};
+    use opm_pipeline::{PipelineConfig, parse_pipeline};
+    use opm_store::PipelineDoc;
     use std::path::PathBuf;
     use std::sync::Arc;
 
@@ -665,8 +667,10 @@ mod tests {
             std::env::temp_dir().join(format!("opm-exec-{tag}-{}-{nanos}", std::process::id()));
         std::fs::create_dir(&parent).expect("temp parent");
         let store = Arc::new(ProjectStore::new());
-        store.create_project(&parent, "proj").expect("scaffold");
-        let root = store.project_root().expect("project open");
+        store
+            .create_work(&parent.join("proj"), &PipelineDoc::new("chain", PipelineConfig::default()))
+            .expect("work folder");
+        let root = store.project_root().expect("work open");
         let mut steps = String::new();
         for i in 0..CHAIN {
             if i > 0 {
@@ -684,7 +688,11 @@ mod tests {
         }
         let pipeline = root.join("pipeline.json");
         std::fs::write(&pipeline, format!("{{\"steps\": [{steps}]}}")).expect("chain json");
-        store.import_pipeline(&pipeline).expect("chain imports");
+        let text = std::fs::read_to_string(&pipeline).expect("read chain json");
+        let config = parse_pipeline(&pipeline.to_string_lossy(), &text).expect("chain parses");
+        let mut doc = PipelineDoc::new("chain", config);
+        doc.normalize_for_import();
+        store.adopt_definition(&doc).expect("chain adopts");
         let ids: Vec<String> = (0..CHAIN).map(|i| format!("s{i}")).collect();
         (parent, store, ids)
     }
