@@ -15,6 +15,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--mode", choices=["light", "dark", "contrast", "large", "live"], action="append")
+    parser.add_argument("--surface", choices=["workspace", "navigation"], default="workspace")
     args = parser.parse_args()
     root = args.output.resolve() if args.output else Path(tempfile.mkdtemp(prefix="opm-workspace-review-"))
     if not root.is_relative_to(Path(tempfile.gettempdir()).resolve()):
@@ -33,7 +34,8 @@ def main():
         if mode == "live":
             env.pop("GTK_THEME", None)
         subprocess.run(["cargo", "test", "--locked", "--manifest-path", "ui/Cargo.toml",
-                        "workspace_visual_review", "--", "--ignored", "--test-threads=1", "--nocapture"],
+                        "explorer_navigation_review" if args.surface == "navigation" else "workspace_visual_review",
+                        "--", "--ignored", "--test-threads=1", "--nocapture"],
                        env=env, check=True)
 
 

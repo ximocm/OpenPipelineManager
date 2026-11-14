@@ -45,6 +45,8 @@ pub struct TabManager {
     /// undo/redo devuelve el buffer exactamente al contenido guardado.
     saved: Vec<String>,
     active: usize,
+    /// Internal blank buffer, not a user-created document or visible tab.
+    placeholder: bool,
     /// Próximo N de «Sin título N» (§37); nunca se reutiliza, para que los
     /// títulos sean únicos.
     next_untitled: u64,
@@ -54,18 +56,20 @@ pub struct TabManager {
 }
 
 impl TabManager {
-    /// Arranca con un tab vacío «Sin título 1» (§37, §12.1).
+    /// Start with an internal blank buffer, hidden until New or an edit.
     pub fn new() -> Self {
         let mut manager = Self {
             tabs: Vec::new(),
             saved: Vec::new(),
             active: 0,
+            placeholder: false,
             next_untitled: 1,
             fs: LocalFs::new(),
             scope: WindowScope::Standalone,
         };
         let tab = manager.blank_tab();
         manager.push_tab(tab, String::new());
+        manager.placeholder = true;
         manager
     }
 
@@ -85,6 +89,11 @@ impl TabManager {
         &self.tabs[self.active]
     }
 
+    pub fn is_placeholder(&self) -> bool {
+        self.placeholder && self.tabs.len() == 1 && self.active().path.is_none()
+            && !self.is_modified(0) && self.active().editor.document().content().is_empty()
+    }
+
     /// Fija el ámbito de la ventana (ISSUE-021): las ventanas de proyecto
     /// validan sus rutas contra la raíz (§48); las standalone no restringen
     /// nada (Notepad++).
@@ -95,6 +104,10 @@ impl TabManager {
 
     /// Crea un tab vacío «Sin título N» y lo activa; devuelve su índice.
     pub fn new_tab(&mut self) -> usize {
+        if self.is_placeholder() {
+            self.placeholder = false;
+            return self.active;
+        }
         let tab = self.blank_tab();
         self.push_tab(tab, String::new())
     }
@@ -111,7 +124,14 @@ impl TabManager {
             untitled_number: 0,
             external_change: false,
         };
-        Ok(self.push_tab(tab, saved))
+        if self.is_placeholder() {
+            self.tabs[0] = tab;
+            self.saved[0] = saved;
+            self.placeholder = false;
+            Ok(0)
+        } else {
+            Ok(self.push_tab(tab, saved))
+        }
     }
 
     /// Guardado explícito del tab activo en su archivo (§3.6, §12.3).
@@ -169,6 +189,7 @@ impl TabManager {
         self.saved.remove(index);
         if self.tabs.is_empty() {
             self.new_tab();
+            self.placeholder = true;
         } else {
             self.active = index.min(self.tabs.len() - 1);
         }
@@ -329,6 +350,7 @@ impl TabManager {
         let _ = self.tabs[self.active]
             .editor
             .replace(Range::new(at, at), text);
+        if self.is_modified(self.active) { self.placeholder = false; }
     }
 
     /// Reemplaza `range` por `text` en el tab activo (búsqueda §40.1): una
@@ -337,6 +359,7 @@ impl TabManager {
     pub fn replace_active(&mut self, range: Range, text: &str) -> bool {
         let replaced = self.tabs[self.active].editor.replace(range, text).is_ok();
         if replaced {
+            if self.is_modified(self.active) { self.placeholder = false; }
             self.resync_saved_flag();
         }
         replaced
@@ -348,6 +371,7 @@ impl TabManager {
     pub fn replace_all_active(&mut self, edits: &[(Range, String)]) -> bool {
         let replaced = self.tabs[self.active].editor.replace_all(edits).is_ok();
         if replaced {
+            if self.is_modified(self.active) { self.placeholder = false; }
             self.resync_saved_flag();
         }
         replaced
@@ -360,6 +384,7 @@ impl TabManager {
         let _ = self.tabs[self.active]
             .editor
             .replace(Range::new(from, to), "");
+        if self.is_modified(self.active) { self.placeholder = false; }
     }
 
     /// Puente EditSink (§8.6): fija la selección del tab activo. Un
@@ -437,6 +462,7 @@ impl TabManager {
         }
         if self.tabs.is_empty() {
             self.new_tab();
+            self.placeholder = true;
         } else {
             // El activo sobreviviente mantiene su posición relativa; el
             // activo descartado pasa a su sucesor (acotado al final).
@@ -459,6 +485,7 @@ impl TabManager {
 
     /// Añade un tab al final y lo activa; devuelve su índice.
     fn push_tab(&mut self, tab: Tab, saved: String) -> usize {
+        self.placeholder = false;
         self.tabs.push(tab);
         self.saved.push(saved);
         self.active = self.tabs.len() - 1;
@@ -560,6 +587,31 @@ mod tests {
     }
 
     #[test]
+    fn opening_replaces_only_the_automatic_blank_buffer() {
+        let dir = TestDir::new();
+        let file = dir.file("one.md");
+        fs::write(&file, "one").unwrap();
+        let mut tabs = TabManager::new();
+        assert!(tabs.is_placeholder());
+        assert_eq!(tabs.open(&file).unwrap(), 0);
+        assert_eq!(tabs.len(), 1);
+        assert!(!tabs.is_placeholder());
+        assert_eq!(tabs.new_tab(), 1);
+        assert!(!tabs.is_placeholder());
+        tabs.open(&file).unwrap();
+        assert_eq!(tabs.len(), 3, "explicit empty drafts must remain open");
+        let mut dirty = TabManager::new();
+        dirty.insert_active(Position::new(0, 0), "keep this draft");
+        assert!(dirty.undo_active());
+        assert!(!dirty.is_placeholder(), "an edited draft must retain its redo history");
+        dirty.open(&file).unwrap();
+        assert_eq!(dirty.len(), 2);
+        dirty.set_active(0);
+        assert!(dirty.redo_active());
+        assert_eq!(dirty.tabs()[0].editor.document().content(), "keep this draft");
+    }
+
+    #[test]
     fn save_sin_path_da_missing_path_y_save_as_habilita_save() {
         // §12.4: sin archivo asignado toca «Guardar como».
         let dir = TestDir::new();
@@ -625,7 +677,8 @@ mod tests {
         // these changes and delete?» lo promete; no vive como «Sin título»).
         let antes_sucias = tabs.len();
         tabs.path_deleted(&dir.file("b.md"));
-        assert_eq!(tabs.len(), antes_sucias - 1);
+        assert_eq!(tabs.len(), (antes_sucias - 1).max(1));
+        assert!(tabs.is_placeholder());
         assert!(
             !tabs
                 .tabs()
@@ -849,6 +902,9 @@ mod tests {
         // el tab editado y siempre queda ≥1 tab.
         let mut tabs = TabManager::new();
         assert_eq!(tabs.title(0), "Sin título 1");
+        assert!(tabs.is_placeholder());
+        assert_eq!(tabs.new_tab(), 0);
+        assert!(!tabs.is_placeholder());
 
         // `new_tab` ×3 al empezar con 1 tab: índices 1..3 y títulos
         // «Sin título 2..4» (el 1 es el inicial).

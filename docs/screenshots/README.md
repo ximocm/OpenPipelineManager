@@ -1,4 +1,4 @@
-# README gallery — Open Pipeline Manager 0.3.0
+# README gallery — Open Pipeline Manager 0.3.1
 
 These PNGs are captures of mapped native GTK windows on Linux/X11 with GTK
 4.14.5 and the Cairo renderer. They have not been repainted or composited into
@@ -8,7 +8,7 @@ select light or dark captures using GitHub's color preference.
 | Image | View |
 |---|---|
 | [Workspace light](workspace-light.png) / [dark](workspace-dark.png) | Four completed steps, generated files, inspector and actual run output |
-| [Start page light](welcome-light.png) / [dark](welcome-dark.png) | Pipeline and work-folder actions, recent work, version 0.3.0 |
+| [Start page light](welcome-light.png) / [dark](welcome-dark.png) | Pipeline and work-folder actions, recent work, version 0.3.1 |
 | [Empty start page](welcome-empty.png) / [800×600](welcome-small.png) | Fresh launch without recent work |
 | [Design](design-light.png) | Native library document, tool palette and connected graph |
 | [Configuration](configure-light.png) / [command](configure-command-light.png) | Actual step dialog, typed inputs, required values and numeric bounds |

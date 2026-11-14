@@ -48,6 +48,8 @@ mod welcome;
 mod workspace_qa;
 #[cfg(test)]
 mod readme_capture;
+#[cfg(test)]
+mod navigation_qa;
 
 use editor::{EditSink, EditorPane, EditMode};
 use explorer::{
@@ -174,8 +176,13 @@ struct AppCmds {
     /// Vistas del dominio (solo ventanas de proyecto con proyecto abierto).
     canvas: Option<Rc<PipelineCanvas>>,
     step_panel: Option<Rc<StepPanel>>,
+    inspector_panel: Option<GtkBox>,
+    inspector_paned: Option<Paned>,
+    inspector_extent: Cell<i32>,
     counters: Option<Rc<Counters>>,
     logs: Option<Rc<LogsPanel>>,
+    logs_paned: Option<Paned>,
+    logs_extent: Cell<i32>,
     /// Botones del toolbar §6 (su sensibilidad la fija `apply_running_ui`).
     run_btn: Option<gtk4::Button>,
     stop_btn: Option<gtk4::Button>,
@@ -197,6 +204,13 @@ impl AppCmds {
     /// Sincroniza vistas y título con el tab activo (cambio de tab, open,
     /// undo/redo, save) y repinta el highlighting.
     fn reload_active(&self) {
+        if self.tabs.borrow().is_placeholder() && *self.center_view.borrow() == CenterView::Editor {
+            if self.pipeline_btn.is_some() {
+                self.show_view(CenterView::Pipeline);
+            } else if self.stack.child_by_name("welcome").is_some() {
+                self.show_view(CenterView::Welcome);
+            }
+        }
         {
             let tabs = self.tabs.borrow();
             let tab = tabs.active();
@@ -385,7 +399,12 @@ impl AppCmds {
         let (title, mode) = {
             let tabs = self.tabs.borrow();
             let index = tabs.active_index();
-            (tabs.title(index), tabs.active().mode)
+            match &*self.center_view.borrow() {
+                CenterView::Pipeline => ("Pipeline".to_owned(), EditMode::Markdown),
+                CenterView::Image(path) => (imageview::page_title(path), EditMode::Markdown),
+                _ if tabs.is_placeholder() => ("Files".to_owned(), EditMode::Markdown),
+                _ => (tabs.title(index), tabs.active().mode),
+            }
         };
         let text = match &self.scope {
             WindowScope::Standalone => format!("{title} — OPM"),
@@ -858,9 +877,23 @@ impl AppCmds {
         self.update_title();
     }
 
-    /// Selección de paso (lienzo, resumen de validación, importación):
-    /// detalle + log del paso en el panel derecho e inferior (paridad SPA
-    /// `handleSelectStep`). Un id que ya no existe limpia la selección.
+    /// Hide/show the existing inspector without resetting its fields or width.
+    fn set_inspector_visible(&self, visible: bool) {
+        let (Some(pane), Some(panel)) = (&self.inspector_paned, &self.inspector_panel) else { return; };
+        if visible == pane.end_child().is_some() { return; }
+        if visible {
+            pane.set_end_child(Some(panel));
+            if self.inspector_extent.get() > 0 {
+                pane.set_position((pane.width() - self.inspector_extent.get()).max(0));
+            }
+        } else {
+            let extent = pane.width() - pane.position();
+            if extent > 0 { self.inspector_extent.set(extent); }
+            pane.set_end_child(Option::<&Widget>::None);
+        }
+    }
+
+    /// Explicit step selection reopens the inspector; background refresh does not.
     fn select_step(&self, step: Option<String>) {
         let snapshot = self.domain_snapshot();
         let detail = match step.as_deref() {
@@ -868,6 +901,7 @@ impl AppCmds {
             None => None,
         };
         let shown = detail.as_ref().map(|detail| detail.step.id.clone());
+        if shown.is_some() { self.set_inspector_visible(true); }
         *self.selected_step.borrow_mut() = shown.clone();
         if let Some(panel) = &self.step_panel {
             panel.select(detail.as_ref());
@@ -1400,6 +1434,14 @@ impl AppCmds {
     /// (etiqueta activa con estilo de pestaña seleccionada + cierre ✕).
     fn sync_strip(&self) {
         let view = self.center_view.borrow().clone();
+        if let Some(explorer) = &self.explorer {
+            let path = match &view {
+                CenterView::Editor => self.tabs.borrow().active().path.clone(),
+                CenterView::Image(path) => Some(path.clone()),
+                _ => None,
+            };
+            explorer.set_active_path(path.as_deref());
+        }
         if let Some(button) = &self.pipeline_btn {
             if view == CenterView::Pipeline {
                 button.add_css_class("opm-active-tab");
@@ -1441,6 +1483,12 @@ impl AppCmds {
             row.append(&open);
             row.append(&close);
             self.image_strip.append(&row);
+        }
+        if let Some(scroll) = self.tab_bar.widget()
+            .ancestor(gtk4::ScrolledWindow::static_type())
+            .and_downcast::<gtk4::ScrolledWindow>()
+        {
+            reveal_active_tab(&scroll);
         }
     }
 
@@ -1553,9 +1601,7 @@ impl Commands for AppCmds {
     }
 
     fn new(&self) {
-        if *self.center_view.borrow() != CenterView::Welcome {
-            self.tabs.borrow_mut().new_tab();
-        }
+        self.tabs.borrow_mut().new_tab();
         // P2-10: tras crear la pestaña, la página visible vuelve al editor
         // (Ctrl+N en la página «Pipeline»/de imagen debe verse el resultado).
         self.show_view(CenterView::Editor);
@@ -1590,6 +1636,7 @@ impl Commands for AppCmds {
     }
 
     fn save(&self) {
+        if *self.center_view.borrow() == CenterView::Editor && self.tabs.borrow().is_placeholder() { return; }
         // Despacho por la página visible (paridad con `close_tab`, P2-10):
         // la página Pipeline de una ventana de Diseño guarda el documento de
         // diseño; el editor guarda la pestaña de texto; imágenes y la página
@@ -1648,6 +1695,7 @@ impl Commands for AppCmds {
     }
 
     fn save_as(&self) {
+        if *self.center_view.borrow() == CenterView::Editor && self.tabs.borrow().is_placeholder() { return; }
         match save_target(self.scope.is_design(), &self.center_view.borrow()) {
             SaveTarget::PipelineDoc => {
                 self.save_pipeline_doc(true);
@@ -1771,6 +1819,42 @@ impl Commands for AppCmds {
             self.explorer_state.borrow_mut().visible = true;
         }
         self.persist_explorer_state();
+    }
+
+    fn show_all_files(&self, visible: bool) {
+        if let Some(explorer) = &self.explorer {
+            explorer.set_show_all(visible);
+        }
+    }
+
+    fn show_hidden_files(&self, visible: bool) {
+        if let Some(explorer) = &self.explorer {
+            explorer.set_show_hidden(visible);
+        }
+    }
+
+    fn refresh_files(&self) {
+        self.refresh();
+    }
+
+    fn toggle_logs(&self) {
+        let (Some(pane), Some(logs)) = (&self.logs_paned, &self.logs) else { return; };
+        if pane.end_child().is_none() {
+            pane.set_end_child(Some(&logs.widget()));
+            if self.logs_extent.get() > 0 {
+                pane.set_position((pane.height() - self.logs_extent.get()).max(0));
+            }
+        } else {
+            let extent = pane.height() - pane.position();
+            if extent > 0 { self.logs_extent.set(extent); }
+            pane.set_end_child(Option::<&Widget>::None);
+        }
+    }
+
+    fn toggle_inspector(&self) {
+        if let Some(pane) = &self.inspector_paned {
+            self.set_inspector_visible(pane.end_child().is_none());
+        }
     }
 
     /// Diseño: documento NUEVO — pide nombre y lo abre en una ventana de
@@ -2276,11 +2360,24 @@ fn theme_css(palette: &theme::Palette) -> String {
         .opm-tab-bar button {{ padding: 6px 12px; border-radius: 0; border: 0; border-bottom: 2px solid transparent; background-image: none; background-color: transparent; color: {muted}; box-shadow: none; }}
         .opm-tab-bar button:hover {{ background-color: alpha({accent}, 0.08); }}
         .opm-tab-bar button.opm-active-tab {{ border-bottom-color: {accent}; background-color: alpha({accent}, 0.08); color: {accent}; font-weight: bold; }}
-        .opm-explorer, .opm-explorer listview {{ background-color: {bg}; color: {fg}; }}
+        .opm-explorer, .opm-explorer listview {{ background-color: {code}; color: {fg}; }}
         .opm-explorer listview label {{ color: {fg}; }}
+        .opm-explorer listview {{ padding: 4px 0; }}
+        .opm-explorer listview > row {{ border-radius: 4px; margin: 0 4px; padding: 0; }}
+        .opm-explorer listview > row:hover {{ background-color: alpha({fg}, 0.05); }}
+        .opm-explorer listview > row:selected {{ background-color: alpha({accent}, 0.12); }}
+        .opm-explorer-row {{ background: none; border: 0; box-shadow: none; border-radius: 4px; padding: 4px 8px; min-height: 24px; }}
+        .opm-explorer-row:hover {{ background: none; }}
+        .opm-explorer-row image {{ color: {muted}; }}
+        .opm-explorer-row:focus-visible {{ outline: 2px solid {accent}; outline-offset: -2px; }}
         .opm-panel {{ border: 1px solid {rule}; border-radius: 6px; background-color: {bg}; }}
         .opm-panel-header {{ background-color: {code}; border-bottom: 1px solid {rule}; border-radius: 5px 5px 0 0; padding: 8px 12px; }}
         .opm-panel-header label {{ color: {fg}; font-weight: bold; }}
+        .opm-workspace-header {{ padding: 0; min-height: 32px; }}
+        .opm-workspace-header button {{ min-height: 0; }}
+        .opm-workspace-header label {{ color: inherit; font-weight: inherit; }}
+        .opm-explorer-header, .opm-inspector-header {{ padding: 0 8px; min-height: 32px; }}
+        .opm-explorer-header button, .opm-inspector-header button {{ padding: 2px; min-width: 24px; min-height: 24px; }}
         .opm-panel-body {{ padding: 0; }}
         .opm-toolbar {{ padding: 4px; }}
         .opm-tools-toggle {{ min-width: 24px; min-height: 24px; padding: 2px; }}
@@ -2349,23 +2446,54 @@ fn disconnect_window_actions(window: &ApplicationWindow) {
 /// `opm-panel-body` con el contenido (inset para que el canvas anuncie su
 /// extensión dentro del marco).
 fn panel_box(title: &str, content: &impl IsA<Widget>) -> GtkBox {
-    let wrapper = GtkBox::new(Orientation::Vertical, 0);
-    wrapper.add_css_class("opm-panel");
     let header = GtkBox::new(Orientation::Horizontal, 6);
-    header.add_css_class("opm-panel-header");
     let label = gtk4::Label::new(Some(title));
     label.set_halign(gtk4::Align::Start);
     label.set_xalign(0.0);
     label.set_hexpand(true);
     header.append(&label);
+    panel_with_header(&header, content)
+}
+
+fn panel_with_header(header: &impl IsA<Widget>, content: &impl IsA<Widget>) -> GtkBox {
+    let wrapper = GtkBox::new(Orientation::Vertical, 0);
+    wrapper.add_css_class("opm-panel");
+    header.add_css_class("opm-panel-header");
     let body = GtkBox::new(Orientation::Vertical, 0);
     body.add_css_class("opm-panel-body");
     body.set_vexpand(true);
-    wrapper.append(&header);
+    wrapper.append(header);
     wrapper.append(&body);
     body.append(content);
     content.set_vexpand(true);
     wrapper
+}
+
+/// Reveal the selected document after GTK allocates its new tab buttons.
+/// Scrolling the header preserves focus, pane widths and the canvas transform.
+fn reveal_active_tab(scroll: &gtk4::ScrolledWindow) {
+    fn active(widget: &Widget) -> Option<Widget> {
+        if widget.has_css_class("opm-active-tab") { return Some(widget.clone()); }
+        let mut next = widget.first_child();
+        while let Some(child) = next {
+            next = child.next_sibling();
+            if let Some(found) = active(&child) { return Some(found); }
+        }
+        None
+    }
+    let attempts = Cell::new(0);
+    scroll.add_tick_callback(move |scroll, _| {
+        let Some(viewport) = scroll.child() else { return glib::ControlFlow::Break; };
+        let child = viewport.downcast_ref::<gtk4::Viewport>()
+            .and_then(|v| v.child()).unwrap_or(viewport);
+        let Some(tab) = active(&child) else { return glib::ControlFlow::Break; };
+        if let Some(bounds) = tab.compute_bounds(&child).filter(|r| r.width() > 0.0) {
+            scroll.hadjustment().clamp_page(bounds.x() as f64, (bounds.x() + bounds.width()) as f64);
+            return glib::ControlFlow::Break;
+        }
+        attempts.set(attempts.get() + 1);
+        if attempts.get() < 3 { glib::ControlFlow::Continue } else { glib::ControlFlow::Break }
+    });
 }
 
 /// Intentos de «reap» del motor al cerrar la ventana (50 ms × 200 = 10 s
@@ -2564,7 +2692,6 @@ fn build_window(app: &Application, scope: WindowScope, open_paths: &[PathBuf]) -
     }));
     // A11: en ventanas con superficie de pipeline la franja es permanente
     // (el editor sigue alcanzable junto a la pestaña «Pipeline»).
-    tab_bar.set_persistent(has_pipeline);
     let tab_bar_widget = tab_bar.widget();
 
     // Barra de búsqueda/reemplazo del archivo actual (§40.1): acciones en
@@ -2610,22 +2737,15 @@ fn build_window(app: &Application, scope: WindowScope, open_paths: &[PathBuf]) -
                     }
                 })
             };
-            // Botón Refresh de la cabecera (P2-13): banderín ⚠ de cambios
-            // externos + relectura del árbol (mismo flujo que `refresh`).
-            let on_refresh: Rc<dyn Fn()> = {
-                let slot = slot.clone();
-                Rc::new(move || {
-                    if let Some(me) = slot.borrow().as_ref().and_then(Weak::upgrade) {
-                        me.refresh();
-                    }
-                })
-            };
             Some(Rc::new(ExplorerPane::new(
-                root, on_open, on_action, on_drop, on_refresh,
+                root, on_open, on_action, on_drop,
             )))
         }
         _ => None,
     };
+    // Document navigation replaces the center panel title, including folders
+    // with a single file. Standalone windows keep their existing tab behavior.
+    tab_bar.set_persistent(has_pipeline || explorer.is_some());
 
     // Layout §6: menú (popover) + toolbar + `explorador | centro | panel de
     // paso` + logs; el centro es un stack con la página «Pipeline»
@@ -2730,8 +2850,8 @@ fn build_window(app: &Application, scope: WindowScope, open_paths: &[PathBuf]) -
                 Rc::new(move |step_id, x, y| {
                     if let Some(me) = slot.borrow().as_ref().and_then(Weak::upgrade) {
                         // Diseño: SOLO el nodo movido en el layout del
-                        // documento (sucio hasta Save). El lienzo de trabajo
-                        // no mueve nodos (`edits_enabled` false).
+                        // documento (sucio hasta Save). Work saves only to
+                        // its own embedded definition in run.json.
                         if let Some(design) = me.design() {
                             design.borrow_mut().set_layout(&step_id, x, y);
                             // El layout es parte del documento: el ● de
@@ -2762,8 +2882,8 @@ fn build_window(app: &Application, scope: WindowScope, open_paths: &[PathBuf]) -
                 let slot = slot.clone();
                 Rc::new(move || {
                     // Ediciones estructurales SOLO en ventanas de diseño y
-                    // nunca en ejecución (§11 A12); en trabajo el lienzo es
-                    // de solo lectura (selección + checkbox).
+                    // nunca en ejecución (§11 A12). Moving cards remains
+                    // available and Work saves layout only in its local copy.
                     slot.borrow()
                         .as_ref()
                         .and_then(Weak::upgrade)
@@ -3000,11 +3120,16 @@ fn build_window(app: &Application, scope: WindowScope, open_paths: &[PathBuf]) -
     // su caja-panel solo cuando hay paneles hermanos: explorador o paso).
     let center_col = GtkBox::new(Orientation::Vertical, 0);
     let tabs_scroll = gtk4::ScrolledWindow::new();
-        tabs_scroll.set_overlay_scrolling(false);
+    tabs_scroll.set_overlay_scrolling(true);
     tabs_scroll.set_policy(gtk4::PolicyType::Automatic, gtk4::PolicyType::Never);
     tabs_scroll.set_propagate_natural_height(true);
     tabs_scroll.set_child(Some(&strip));
-    center_col.append(&tabs_scroll);
+    tabs_scroll.hadjustment().connect_page_size_notify({
+        let weak = tabs_scroll.downgrade();
+        move |_| {
+            if let Some(scroll) = weak.upgrade() { reveal_active_tab(&scroll); }
+        }
+    });
     center_col.append(&find_bar.widget());
     center_col.append(&stack);
     stack.set_vexpand(true);
@@ -3020,12 +3145,10 @@ fn build_window(app: &Application, scope: WindowScope, open_paths: &[PathBuf]) -
         0
     };
     let mut current: Widget = if step_panel.is_some() || explorer.is_some() {
-        panel_box(
-            if has_pipeline { "Pipeline" } else { "Workspace" },
-            &center_col,
-        )
-        .upcast()
+        tabs_scroll.add_css_class("opm-workspace-header");
+        panel_with_header(&tabs_scroll, &center_col).upcast()
     } else {
+        center_col.prepend(&tabs_scroll);
         center_col.clone().upcast()
     };
     let mut explorer_paned: Option<Paned> = None;
@@ -3109,15 +3232,28 @@ fn build_window(app: &Application, scope: WindowScope, open_paths: &[PathBuf]) -
         tools.set_shrink_end_child(false);
         current = tools.upcast();
     }
+    let mut inspector_panel = None;
+    let mut inspector_paned = None;
     if let Some(step_panel) = &step_panel {
+        let panel = panel_box("Inspector", &step_panel.widget());
+        let header = panel.first_child().and_downcast::<GtkBox>().unwrap();
+        header.add_css_class("opm-inspector-header");
+        let hide = gtk4::Button::from_icon_name("window-close-symbolic");
+        hide.add_css_class("flat");
+        hide.set_action_name(Some("win.toggle-inspector"));
+        hide.set_tooltip_text(Some("Hide inspector (Ctrl+Shift+I)"));
+        hide.update_property(&[gtk4::accessible::Property::Label("Hide inspector")]);
+        header.append(&hide);
         let inner = Paned::new(Orientation::Horizontal);
         inner.set_wide_handle(true);
         inner.set_start_child(Some(&current));
-        inner.set_end_child(Some(&panel_box("Inspector", &step_panel.widget())));
+        inner.set_end_child(Some(&panel));
         inner.set_resize_end_child(false);
         inner.set_shrink_start_child(false);
         inner.set_shrink_end_child(false);
         inner.set_position((window.default_width() - explorer_width - 360).max(240));
+        inspector_panel = Some(panel);
+        inspector_paned = Some(inner.clone());
         current = inner.upcast();
     }
     if let Some(explorer) = &explorer {
@@ -3128,7 +3264,7 @@ fn build_window(app: &Application, scope: WindowScope, open_paths: &[PathBuf]) -
         navigator.set_policy(gtk4::PolicyType::Automatic, gtk4::PolicyType::Never);
         navigator.set_min_content_width(160);
         navigator.set_child(Some(&explorer.widget()));
-        let panel = panel_box("Explorer", &navigator);
+        let panel = panel_with_header(&explorer.header(), &navigator);
         let main_paned = Paned::new(Orientation::Horizontal);
         main_paned.set_wide_handle(true);
         main_paned.set_end_child(Some(&current));
@@ -3143,6 +3279,7 @@ fn build_window(app: &Application, scope: WindowScope, open_paths: &[PathBuf]) -
         explorer_panel = Some(panel);
         current = main_paned.upcast();
     }
+    let mut logs_paned = None;
     if let Some(logs) = &logs {
         let vertical = Paned::new(Orientation::Vertical);
         vertical.set_wide_handle(true);
@@ -3151,6 +3288,7 @@ fn build_window(app: &Application, scope: WindowScope, open_paths: &[PathBuf]) -
         vertical.set_resize_end_child(false);
         vertical.set_shrink_start_child(false);
         vertical.set_position((window.default_height() - 230).max(240));
+        logs_paned = Some(vertical.clone());
         current = vertical.upcast();
     }
     let content = current;
@@ -3206,8 +3344,13 @@ fn build_window(app: &Application, scope: WindowScope, open_paths: &[PathBuf]) -
         image_strip,
         canvas,
         step_panel,
+        inspector_panel,
+        inspector_paned,
+        inspector_extent: Cell::new(0),
         counters,
         logs,
+        logs_paned,
+        logs_extent: Cell::new(0),
         run_btn,
         stop_btn,
         action_group: RefCell::new(None),

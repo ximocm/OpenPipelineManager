@@ -140,6 +140,30 @@ fn work_isolation() {
     cleanup(&parent);
 }
 
+#[test]
+fn work_layout_changes_stay_in_its_embedded_copy() {
+    let parent = temp_dir("layout-copy");
+    let library = PipelineLibrary::new(parent.join("pipelines"));
+    let doc = PipelineDoc::new("shared", pipeline_of(vec![plain_step("make", "true")]));
+    library.save("shared", &doc, SaveMode::CreateNew).unwrap();
+    let library_file = parent.join("pipelines/shared.pipeline");
+    let before = fs::read(&library_file).unwrap();
+    let first = ProjectStore::new();
+    let second = ProjectStore::new();
+    first.create_work(&parent.join("one"), &library.load("shared").unwrap()).unwrap();
+    second.create_work(&parent.join("two"), &library.load("shared").unwrap()).unwrap();
+    let second_layout = second.snapshot().visual_layout;
+    first.set_step_state("make", StepState { status: StepStatus::Running, ..StepState::default() });
+    first.set_layout(std::collections::HashMap::from([("make".into(), (320.0, 240.0))])).unwrap();
+    let reopened = ProjectStore::new();
+    reopened.open_work(&parent.join("one")).unwrap();
+    assert_eq!(reopened.snapshot().visual_layout["make"], opm_store::Position { x: 320.0, y: 240.0 });
+    assert_eq!(second.snapshot().visual_layout, second_layout);
+    assert_eq!(fs::read(&library_file).unwrap(), before);
+    assert_eq!(first.state_of("make").status, StepStatus::Running);
+    cleanup(&parent);
+}
+
 /// An interrupted save (staged write aborted before the rename, or an orphan
 /// temp left by a killed process) never damages the previous complete
 /// `run.json` or `.pipeline` document — both keep loading.
