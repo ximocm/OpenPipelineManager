@@ -6,6 +6,12 @@ The format follows Keep a Changelog-style sections, and the project uses semanti
 
 ## Unreleased
 
+## 0.3.2 - 2026-11-14
+
+### Fixed
+
+- Enable Project → New pipeline from Work, including during execution. It opens an independent Design window without replacing the Work or changing its files, logs or run state; the new pipeline is written to the library only on Save.
+
 ## 0.3.1 - 2026-11-14
 
 ### Added

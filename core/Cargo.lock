@@ -207,14 +207,14 @@ checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 
 [[package]]
 name = "opm-document"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "opm-parser",
 ]
 
 [[package]]
 name = "opm-exec"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "chrono",
  "libc",
@@ -225,14 +225,14 @@ dependencies = [
 
 [[package]]
 name = "opm-fs"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "opm-document",
 ]
 
 [[package]]
 name = "opm-parser"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "opm-document",
  "pulldown-cmark",
@@ -240,7 +240,7 @@ dependencies = [
 
 [[package]]
 name = "opm-pipeline"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "opm-fs",
  "serde",
@@ -250,7 +250,7 @@ dependencies = [
 
 [[package]]
 name = "opm-store"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "opm-fs",
  "opm-pipeline",
@@ -261,7 +261,7 @@ dependencies = [
 
 [[package]]
 name = "opm-theme"
-version = "0.3.1"
+version = "0.3.2"
 
 [[package]]
 name = "pin-project-lite"

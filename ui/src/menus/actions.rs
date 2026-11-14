@@ -401,7 +401,8 @@ fn dispatch(cmd: Command, host: &dyn Commands, checked: bool) {
 /// despachar» y se deshabilitan VISIBLEMENTE por tipo de ventana.)
 ///
 /// - Diseño deshabilita la superficie de trabajo (salvo spawn de ventanas)
-///   y habilita la propia; trabajo deshabilita la superficie de diseño.
+///   y habilita la propia; New pipeline puede abrir un diseño independiente
+///   desde cualquier ámbito sin sustituir el trabajo abierto.
 /// - Guardar/Exportar/Crear paso actúan sobre el documento de DISEÑO
 ///   abierto: solo en ventanas de diseño.
 /// - Actualizar/Run/Stop actúan sobre la carpeta de TRABAJO: solo en
@@ -409,12 +410,13 @@ fn dispatch(cmd: Command, host: &dyn Commands, checked: bool) {
 /// - Las ventanas standalone/folder son neutrales: pueden crear diseños y
 ///   lanzar trabajos nuevos, pero no mutar ninguno de los dos dominios.
 /// - Con una ejecución en curso se retienen los comandos que abren o
-///   sustituyen dominios (paridad con el gating previo de `apply_running_ui`).
+///   sustituyen dominios, salvo New pipeline, que no modifica el trabajo.
 pub fn enabled_for(cmd: Command, scope: &WindowScope, running: bool) -> bool {
     use Command::*;
     let in_kind = match cmd {
-        // Superficie de diseño: deshabilitada en ventanas de trabajo.
-        NewPipeline | OpenPipeline | ImportPipeline => !scope.is_work(),
+        // Un diseño nuevo se abre en otra ventana desde Work.
+        NewPipeline => true,
+        OpenPipeline | ImportPipeline => !scope.is_work(),
         ExportPipeline | SavePipeline | SavePipelineAs | CreateStep => scope.is_design(),
         // Crear/abrir trabajo es neutro: lleva el diseño a ejecución desde
         // cualquier ventana (solo se retiene durante una ejecución).
@@ -437,7 +439,7 @@ pub fn enabled_for(cmd: Command, scope: &WindowScope, running: bool) -> bool {
     !running
         || !matches!(
             cmd,
-            NewPipeline | OpenPipeline | ImportPipeline | CreateStep | NewWork | OpenWork
+            OpenPipeline | ImportPipeline | CreateStep | NewWork | OpenWork
                 | UpdateFromLibrary | RunSelected | OpenFolder
         )
 }
@@ -806,8 +808,14 @@ mod tests {
                 "{cmd:?} debe estar deshabilitado en trabajo"
             );
         }
-        // Superficie de diseño (spawn sobre la librería): nunca en trabajo.
-        for cmd in [NewPipeline, OpenPipeline, ImportPipeline] {
+        // New pipeline no sustituye Work, ni retiene su ejecución.
+        for scope in scopes {
+            for running in [false, true] {
+                assert!(enabled_for(NewPipeline, scope, running), "NewPipeline en {scope:?}");
+            }
+        }
+        // Las demás acciones de apertura de diseño conservan su gate.
+        for cmd in [OpenPipeline, ImportPipeline] {
             for scope in [&design, &folder, &standalone] {
                 assert!(enabled_for(cmd, scope, false), "{cmd:?} en {scope:?}");
             }
