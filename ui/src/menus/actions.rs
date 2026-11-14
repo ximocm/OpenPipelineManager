@@ -39,10 +39,11 @@ pub enum Command {
     ToggleMode,
     /// Muestra/oculta el explorador de archivos (§14.3, §39: `Ctrl+B`).
     ToggleExplorer,
+    ToggleInspector,
     ShowAllFiles,
     ShowHiddenFiles,
     RefreshFiles,
-    ShowLogs,
+    ToggleLogs,
     /// Diseño: crea un documento de pipeline en memoria y abre su ventana.
     NewPipeline,
     /// Browse and install reusable tool and pipeline definitions.
@@ -90,10 +91,11 @@ impl Command {
             Command::Replace => "win.replace",
             Command::ToggleMode => "win.toggle-mode",
             Command::ToggleExplorer => "win.toggle-explorer",
+            Command::ToggleInspector => "win.toggle-inspector",
             Command::ShowAllFiles => "win.show-all-files",
             Command::ShowHiddenFiles => "win.show-hidden-files",
             Command::RefreshFiles => "win.refresh-files",
-            Command::ShowLogs => "win.show-logs",
+            Command::ToggleLogs => "win.toggle-logs",
             Command::NewPipeline => "win.new-pipeline",
             Command::Marketplace => "win.marketplace",
             Command::OpenPipeline => "win.open-pipeline",
@@ -128,10 +130,11 @@ impl Command {
             Command::Replace => "Replace",
             Command::ToggleMode => "Markdown/Visual",
             Command::ToggleExplorer => "Toggle Explorer",
+            Command::ToggleInspector => "Toggle Inspector",
             Command::ShowAllFiles => "Show All Files",
             Command::ShowHiddenFiles => "Show Hidden Files",
             Command::RefreshFiles => "Refresh Files",
-            Command::ShowLogs => "Logs / Console",
+            Command::ToggleLogs => "Toggle Logs / Console",
             Command::NewPipeline => "New pipeline",
             Command::Marketplace => "Marketplace…",
             Command::OpenPipeline => "Open pipeline",
@@ -170,11 +173,11 @@ pub trait Commands {
     fn toggle_mode(&self);
     /// Muestra/oculta el explorador (§14.3).
     fn toggle_explorer(&self);
+    fn toggle_inspector(&self);
     fn show_all_files(&self, visible: bool);
     fn show_hidden_files(&self, visible: bool);
     fn refresh_files(&self);
-    fn show_logs(&self, visible: bool);
-    fn logs_visible(&self) -> bool;
+    fn toggle_logs(&self);
     /// Diseño: documento nuevo (nombre + ventana de diseño, sin carpeta).
     fn new_pipeline(&self);
     /// Diseño: abre un documento de la librería (browser de la librería).
@@ -219,7 +222,8 @@ pub const ACCELERATORS: &[(&str, &str)] = &[
     ("win.toggle-mode", "<Control><Alt>m"),
     ("win.toggle-explorer", "<Control>b"),
     ("win.show-hidden-files", "<Control><Shift>period"),
-    ("win.show-logs", "<Control>j"),
+    ("win.toggle-logs", "<Control>j"),
+    ("win.toggle-inspector", "<Control><Shift>i"),
 ];
 
 /// Todos los comandos, en orden de aparición en los menús §36.
@@ -236,10 +240,11 @@ pub const ALL_COMMANDS: &[Command] = &[
     Command::Replace,
     Command::ToggleMode,
     Command::ToggleExplorer,
+    Command::ToggleInspector,
     Command::ShowAllFiles,
     Command::ShowHiddenFiles,
     Command::RefreshFiles,
-    Command::ShowLogs,
+    Command::ToggleLogs,
     Command::Marketplace,
     Command::NewPipeline,
     Command::OpenPipeline,
@@ -321,10 +326,11 @@ const MENUBAR_SPEC: &[SubmenuSpec] = &[
         &[&[
             ("Markdown/Visual", "win.toggle-mode"),
             ("Toggle Explorer", "win.toggle-explorer"),
+            ("Toggle Inspector", "win.toggle-inspector"),
             ("Show All Files", "win.show-all-files"),
             ("Show Hidden Files", "win.show-hidden-files"),
             ("Refresh Files", "win.refresh-files"),
-            ("Logs / Console", "win.show-logs"),
+            ("Toggle Logs / Console", "win.toggle-logs"),
         ]],
     ),
     (
@@ -367,10 +373,11 @@ fn dispatch(cmd: Command, host: &dyn Commands, checked: bool) {
         Command::Replace => host.replace(),
         Command::ToggleMode => host.toggle_mode(),
         Command::ToggleExplorer => host.toggle_explorer(),
+        Command::ToggleInspector => host.toggle_inspector(),
         Command::ShowAllFiles => host.show_all_files(checked),
         Command::ShowHiddenFiles => host.show_hidden_files(checked),
         Command::RefreshFiles => host.refresh_files(),
-        Command::ShowLogs => host.show_logs(checked),
+        Command::ToggleLogs => host.toggle_logs(),
         Command::NewPipeline => host.new_pipeline(),
         Command::Marketplace => host.marketplace(),
         Command::OpenPipeline => host.open_pipeline(),
@@ -419,7 +426,8 @@ pub fn enabled_for(cmd: Command, scope: &WindowScope, running: bool) -> bool {
         OpenFolder => true,
         ShowAllFiles | ShowHiddenFiles | RefreshFiles =>
             matches!(scope, WindowScope::Folder(_) | WindowScope::Work(_)),
-        ShowLogs => scope.is_work(),
+        ToggleLogs => scope.is_work(),
+        ToggleInspector => scope.has_pipeline_surface(),
         // El resto (texto/editores/ayuda) no dependen del ámbito.
         _ => true,
     };
@@ -455,7 +463,8 @@ pub const GATED_COMMANDS: &[Command] = &[
     Command::ShowAllFiles,
     Command::ShowHiddenFiles,
     Command::RefreshFiles,
-    Command::ShowLogs,
+    Command::ToggleLogs,
+    Command::ToggleInspector,
 ];
 
 /// Construye el grupo de acciones `win.*` de la ventana: cada comando se
@@ -473,9 +482,8 @@ pub fn action_group(host: &Rc<dyn Commands>) -> gio::SimpleActionGroup {
             .strip_prefix("win.")
             .expect("los action_id usan el prefijo «win.» (§36)");
         let host = Rc::clone(host);
-        let action = if matches!(cmd, Command::ShowAllFiles | Command::ShowHiddenFiles | Command::ShowLogs) {
-            let action = gio::SimpleAction::new_stateful(name, None,
-                &(cmd == Command::ShowLogs && host.logs_visible()).to_variant());
+        let action = if matches!(cmd, Command::ShowAllFiles | Command::ShowHiddenFiles) {
+            let action = gio::SimpleAction::new_stateful(name, None, &false.to_variant());
             action.connect_activate(|action, _| {
                 let checked = action.state().and_then(|v| v.get::<bool>()).unwrap_or(false);
                 action.change_state(&(!checked).to_variant());
@@ -634,10 +642,11 @@ mod tests {
                 &[&[
                     ("Markdown/Visual", "win.toggle-mode"),
                     ("Toggle Explorer", "win.toggle-explorer"),
+                    ("Toggle Inspector", "win.toggle-inspector"),
                     ("Show All Files", "win.show-all-files"),
                     ("Show Hidden Files", "win.show-hidden-files"),
                     ("Refresh Files", "win.refresh-files"),
-                    ("Logs / Console", "win.show-logs"),
+                    ("Toggle Logs / Console", "win.toggle-logs"),
                 ]],
             ),
             (
@@ -767,6 +776,14 @@ mod tests {
         let standalone = WindowScope::Standalone;
         let scopes = [&design, &work, &folder, &standalone];
 
+        for scope in [&design, &work] {
+            assert!(enabled_for(ToggleInspector, scope, true));
+        }
+        for scope in [&folder, &standalone] {
+            assert!(!enabled_for(ToggleInspector, scope, false));
+        }
+        assert!(enabled_for(ToggleLogs, &work, true));
+
         for cmd in [ShowAllFiles, ShowHiddenFiles, RefreshFiles] {
             for scope in [&work, &folder] {
                 assert!(enabled_for(cmd, scope, true), "{cmd:?} in {scope:?}");
@@ -870,7 +887,8 @@ mod tests {
             ShowAllFiles,
             ShowHiddenFiles,
             RefreshFiles,
-            ShowLogs,
+            ToggleLogs,
+            ToggleInspector,
         ];
         esperado.sort_by_key(|cmd| cmd.action_id());
         let mut gate: Vec<Command> = GATED_COMMANDS.to_vec();

@@ -84,28 +84,51 @@ fn explorer_navigation_review() {
     reopened.open_work(&root).unwrap();
     assert_eq!(reopened.snapshot().visual_layout["create_message"], saved);
 
-    let console = widgets(work.window.upcast_ref()).into_iter()
-        .filter_map(|w| w.downcast::<gtk4::ToggleButton>().ok())
-        .find(|button| button.action_name().as_deref() == Some("win.show-logs")).unwrap();
-    assert!(console.is_active());
+    assert!(actions.action_state("toggle-logs").is_none());
+    assert!(actions.action_state("toggle-inspector").is_none());
+    assert!(!widgets(work.window.upcast_ref()).into_iter().any(|w|
+        w.downcast::<gtk4::Button>().is_ok_and(|b|
+            b.icon_name().as_deref() == Some("utilities-terminal-symbolic"))));
     let logs = work.logs.as_ref().unwrap();
     logs.show_step(Some("create_message"), "before hide\n");
     let log_view = widgets(&logs.widget()).into_iter()
         .find_map(|w| w.downcast::<gtk4::TextView>().ok()).unwrap();
     let log_pane = work.logs_paned.as_ref().unwrap();
     let log_height = log_pane.height() - log_pane.position();
-    console.emit_clicked();
+    actions.activate_action("toggle-logs", None);
     settle();
-    assert!(!checked(&actions, "show-logs"));
     assert!(log_pane.end_child().is_none());
     logs.append_line("create_message", "while hidden\n");
     capture(&work.window, &output.join("console-hidden.png"));
-    actions.activate_action("show-logs", None);
+    actions.activate_action("toggle-logs", None);
     settle();
-    assert!(console.is_active());
     assert_eq!(log_pane.height() - log_pane.position(), log_height);
     let buffer = log_view.buffer();
     assert!(buffer.text(&buffer.start_iter(), &buffer.end_iter(), false).contains("while hidden"));
+    let inspector = work.inspector_paned.as_ref().unwrap();
+    let inspector_width = inspector.width() - inspector.position();
+    let close = widgets(&work.inspector_panel.as_ref().unwrap().clone().upcast()).into_iter()
+        .filter_map(|w| w.downcast::<gtk4::Button>().ok())
+        .find(|b| b.action_name().as_deref() == Some("win.toggle-inspector")).unwrap();
+    close.emit_clicked();
+    settle();
+    assert!(inspector.end_child().is_none());
+    work.refresh_domain();
+    settle();
+    assert!(inspector.end_child().is_none(), "background refresh must keep it hidden");
+    capture(&work.window, &output.join("inspector-hidden.png"));
+    // A card selection uses the same press path as a click and reopens it,
+    // even if this card was already selected before the inspector was hidden.
+    drag(canvas, (saved.x + 100.0, saved.y + 50.0), (0.0, 0.0));
+    settle();
+    assert!(inspector.end_child().is_some());
+    assert_eq!(inspector.width() - inspector.position(), inspector_width);
+    actions.activate_action("toggle-inspector", None);
+    settle();
+    assert!(inspector.end_child().is_none());
+    actions.activate_action("toggle-inspector", None);
+    settle();
+    assert_eq!(inspector.width() - inspector.position(), inspector_width);
     assert!(!has_file(explorer, ".session.md"));
     assert!(!has_file(explorer, "payload.bin"));
     assert!(!checked(&actions, "show-all-files"));
@@ -195,8 +218,10 @@ fn explorer_navigation_review() {
     for action in ["show-all-files", "show-hidden-files", "refresh-files"] {
         assert!(!group(&standalone).is_action_enabled(action));
     }
-    assert!(!group(&standalone).is_action_enabled("show-logs"));
-    assert!(!group(&folder).is_action_enabled("show-logs"));
+    assert!(!group(&standalone).is_action_enabled("toggle-logs"));
+    assert!(!group(&folder).is_action_enabled("toggle-logs"));
+    assert!(!group(&folder).is_action_enabled("toggle-inspector"));
+    assert!(!group(&standalone).is_action_enabled("toggle-inspector"));
     work.close_tab();
     assert!(work.tabs.borrow().is_placeholder());
     assert_eq!(*work.center_view.borrow(), CenterView::Pipeline);

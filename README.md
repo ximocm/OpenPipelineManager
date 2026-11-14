@@ -156,7 +156,8 @@ Editing a library pipeline does not silently change existing work. Adopt a revis
 | Reconnect / remove | Select a dependency, then drag its destination port or press **Delete** |
 | Leave the tool brush | **Escape** |
 | Save | **Ctrl+S**, according to the visible document |
-| Show / hide logs | **Ctrl+J**, the toolbar terminal icon, or **View → Logs / Console** |
+| Show / hide inspector | **Ctrl+Shift+I** or **View → Toggle Inspector**; selecting a card reopens it |
+| Show / hide logs | **Ctrl+J** or **View → Toggle Logs / Console** |
 
 ## Validation and execution
 

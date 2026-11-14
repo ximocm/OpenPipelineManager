@@ -21,10 +21,13 @@ Unreleased. No dependency, pipeline format or execution engine changes.
   positions in its own embedded definition; a store isolation test verifies
   that the library and a second work folder are unchanged, including when the
   first work is running. A real GTK drag is saved and verified after reopening.
-- The checked Logs / Console action (Ctrl+J and toolbar terminal icon) hides the
+- The plain Toggle Logs / Console action (Ctrl+J or View) hides the
   pane without stopping logging. Its previous height, buffer and reading
-  controls are retained. The GTK test checks icon/menu state synchronization,
+  controls are retained. The GTK test checks a stateless action without a toolbar button,
   lines received while hidden, and restoration of the divider position.
+- The inspector can hide through its header close button or View / Ctrl+Shift+I.
+  Card selection reopens it at the previous width; refresh leaves it hidden.
+  The GTK test checks both paths and asserts restoration of the divider.
 - Initial untitled buffers stay internal. The first real file replaces the
   placeholder; New explicitly creates a document. Edited drafts retain their
   undo/redo history, and closing the final file in Work returns to Pipeline.
@@ -88,3 +91,5 @@ python3 scripts/review-workspace.py --mode light --mode dark \
 | ![Keyboard focus on the active file](evidencias/NAV-contrast.png) | ![Navigation with Sans 22](evidencias/NAV-large.png) |
 
 ![Expanded workspace with the console hidden](evidencias/NAV-console-hidden.png)
+
+![Canvas with the inspector hidden](evidencias/NAV-inspector-hidden.png)

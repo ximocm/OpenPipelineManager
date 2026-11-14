@@ -176,6 +176,9 @@ struct AppCmds {
     /// Vistas del dominio (solo ventanas de proyecto con proyecto abierto).
     canvas: Option<Rc<PipelineCanvas>>,
     step_panel: Option<Rc<StepPanel>>,
+    inspector_panel: Option<GtkBox>,
+    inspector_paned: Option<Paned>,
+    inspector_extent: Cell<i32>,
     counters: Option<Rc<Counters>>,
     logs: Option<Rc<LogsPanel>>,
     logs_paned: Option<Paned>,
@@ -874,9 +877,23 @@ impl AppCmds {
         self.update_title();
     }
 
-    /// Selección de paso (lienzo, resumen de validación, importación):
-    /// detalle + log del paso en el panel derecho e inferior (paridad SPA
-    /// `handleSelectStep`). Un id que ya no existe limpia la selección.
+    /// Hide/show the existing inspector without resetting its fields or width.
+    fn set_inspector_visible(&self, visible: bool) {
+        let (Some(pane), Some(panel)) = (&self.inspector_paned, &self.inspector_panel) else { return; };
+        if visible == pane.end_child().is_some() { return; }
+        if visible {
+            pane.set_end_child(Some(panel));
+            if self.inspector_extent.get() > 0 {
+                pane.set_position((pane.width() - self.inspector_extent.get()).max(0));
+            }
+        } else {
+            let extent = pane.width() - pane.position();
+            if extent > 0 { self.inspector_extent.set(extent); }
+            pane.set_end_child(Option::<&Widget>::None);
+        }
+    }
+
+    /// Explicit step selection reopens the inspector; background refresh does not.
     fn select_step(&self, step: Option<String>) {
         let snapshot = self.domain_snapshot();
         let detail = match step.as_deref() {
@@ -884,6 +901,7 @@ impl AppCmds {
             None => None,
         };
         let shown = detail.as_ref().map(|detail| detail.step.id.clone());
+        if shown.is_some() { self.set_inspector_visible(true); }
         *self.selected_step.borrow_mut() = shown.clone();
         if let Some(panel) = &self.step_panel {
             panel.select(detail.as_ref());
@@ -1819,10 +1837,9 @@ impl Commands for AppCmds {
         self.refresh();
     }
 
-    fn show_logs(&self, visible: bool) {
+    fn toggle_logs(&self) {
         let (Some(pane), Some(logs)) = (&self.logs_paned, &self.logs) else { return; };
-        if visible == pane.end_child().is_some() { return; }
-        if visible {
+        if pane.end_child().is_none() {
             pane.set_end_child(Some(&logs.widget()));
             if self.logs_extent.get() > 0 {
                 pane.set_position((pane.height() - self.logs_extent.get()).max(0));
@@ -1834,8 +1851,10 @@ impl Commands for AppCmds {
         }
     }
 
-    fn logs_visible(&self) -> bool {
-        self.logs_paned.as_ref().is_some_and(|pane| pane.end_child().is_some())
+    fn toggle_inspector(&self) {
+        if let Some(pane) = &self.inspector_paned {
+            self.set_inspector_visible(pane.end_child().is_none());
+        }
     }
 
     /// Diseño: documento NUEVO — pide nombre y lo abre en una ventana de
@@ -2357,8 +2376,8 @@ fn theme_css(palette: &theme::Palette) -> String {
         .opm-workspace-header {{ padding: 0; min-height: 32px; }}
         .opm-workspace-header button {{ min-height: 0; }}
         .opm-workspace-header label {{ color: inherit; font-weight: inherit; }}
-        .opm-explorer-header {{ padding: 0 8px; min-height: 32px; }}
-        .opm-explorer-header button {{ padding: 2px; min-width: 24px; min-height: 24px; }}
+        .opm-explorer-header, .opm-inspector-header {{ padding: 0 8px; min-height: 32px; }}
+        .opm-explorer-header button, .opm-inspector-header button {{ padding: 2px; min-width: 24px; min-height: 24px; }}
         .opm-panel-body {{ padding: 0; }}
         .opm-toolbar {{ padding: 4px; }}
         .opm-tools-toggle {{ min-width: 24px; min-height: 24px; padding: 2px; }}
@@ -3091,12 +3110,6 @@ fn build_window(app: &Application, scope: WindowScope, open_paths: &[PathBuf]) -
             }
             toolbar.append(&run_btn);
             toolbar.append(&stop_btn);
-            let console = gtk4::ToggleButton::new();
-            console.set_icon_name("utilities-terminal-symbolic");
-            console.set_action_name(Some("win.show-logs"));
-            console.set_tooltip_text(Some("Show or hide Logs / Console (Ctrl+J)"));
-            console.update_property(&[gtk4::accessible::Property::Label("Logs / Console")]);
-            toolbar.append(&console);
             (Some(toolbar), Some(run_btn), Some(stop_btn), design_label)
         }
     } else {
@@ -3219,15 +3232,28 @@ fn build_window(app: &Application, scope: WindowScope, open_paths: &[PathBuf]) -
         tools.set_shrink_end_child(false);
         current = tools.upcast();
     }
+    let mut inspector_panel = None;
+    let mut inspector_paned = None;
     if let Some(step_panel) = &step_panel {
+        let panel = panel_box("Inspector", &step_panel.widget());
+        let header = panel.first_child().and_downcast::<GtkBox>().unwrap();
+        header.add_css_class("opm-inspector-header");
+        let hide = gtk4::Button::from_icon_name("window-close-symbolic");
+        hide.add_css_class("flat");
+        hide.set_action_name(Some("win.toggle-inspector"));
+        hide.set_tooltip_text(Some("Hide inspector (Ctrl+Shift+I)"));
+        hide.update_property(&[gtk4::accessible::Property::Label("Hide inspector")]);
+        header.append(&hide);
         let inner = Paned::new(Orientation::Horizontal);
         inner.set_wide_handle(true);
         inner.set_start_child(Some(&current));
-        inner.set_end_child(Some(&panel_box("Inspector", &step_panel.widget())));
+        inner.set_end_child(Some(&panel));
         inner.set_resize_end_child(false);
         inner.set_shrink_start_child(false);
         inner.set_shrink_end_child(false);
         inner.set_position((window.default_width() - explorer_width - 360).max(240));
+        inspector_panel = Some(panel);
+        inspector_paned = Some(inner.clone());
         current = inner.upcast();
     }
     if let Some(explorer) = &explorer {
@@ -3318,6 +3344,9 @@ fn build_window(app: &Application, scope: WindowScope, open_paths: &[PathBuf]) -
         image_strip,
         canvas,
         step_panel,
+        inspector_panel,
+        inspector_paned,
+        inspector_extent: Cell::new(0),
         counters,
         logs,
         logs_paned,

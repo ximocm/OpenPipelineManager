@@ -75,6 +75,8 @@ working even if the library file was moved or deleted.
 
 The left explorer supports creating files/folders, uploading files, renaming, deleting, and moving items by drag and drop. Open a text, FASTA, YAML, JSON, shell, or image file from the tree to show it in a center tab. Pipeline, file and image tabs share the center pane's top header. A new Work starts with its pipeline tab alone; file tabs appear when you open a file or explicitly choose New. Closing the final file in Work returns to Pipeline.
 
+Use **View → Toggle Inspector**, **Ctrl+Shift+I**, or the close button in its header to hide/show the inspector. Selecting a card reopens it at its previous width; background refresh does not reopen a hidden inspector.
+
 Use **View → Show All Files**, **Show Hidden Files** or **Refresh Files** to control the tree. The two filters are independent and apply only to the current window; refresh keeps their values. **Ctrl+Shift+.** toggles hidden files; **Ctrl+B** shows or hides the explorer. The folder header offers New file and New folder, and the tree highlights the active document.
 
 ## 4. Importing and Exporting Pipelines
@@ -248,7 +250,7 @@ affect the display only; log files and pipeline commands are unchanged.
 
 Running happens in a work window. Use **Run selected** to run selected steps. If no steps are selected, the app runs pending steps in dependency order. Use each step card or the right panel to run one step. Input selections and option values are per work folder: the same library pipeline can run in several work folders without sharing values, logs, outputs, or completion state.
 
-Use the terminal icon in the toolbar, **View → Logs / Console**, or **Ctrl+J**
+Use **View → Toggle Logs / Console** or **Ctrl+J**
 to show/hide the console. Hiding it preserves its height, log buffer, Follow
 and Wrap settings; logging and execution continue in the background.
 
