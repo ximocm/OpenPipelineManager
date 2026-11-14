@@ -56,6 +56,14 @@ fn open_document(cmds: &AppCmds, path: &Path) {
     }
 }
 
+fn explorer_folder(cmds: &AppCmds, name: &str) -> Option<gtk4::Button> {
+    widgets(&cmds.explorer.as_ref()?.widget()).into_iter()
+        .filter_map(|w| w.downcast::<gtk4::Button>().ok())
+        .find(|button| button.has_css_class("opm-explorer-row")
+            && widgets(button.upcast_ref()).into_iter().any(|widget|
+                widget.downcast::<gtk4::Label>().is_ok_and(|label| label.text() == name)))
+}
+
 #[test]
 #[ignore = "requires a display, isolated OPM_QA_DIR/config/libraries, and POSIX awk"]
 fn readme_screenshots() {
@@ -193,26 +201,8 @@ fn readme_screenshots() {
     open_document(&work, &root.join("outputs/report.txt"));
     work.show_view(CenterView::Pipeline);
     for folder in ["Input", "outputs"] {
-        wait_for(|| {
-            widgets(&work.explorer.as_ref().unwrap().widget())
-                .iter()
-                .any(|w| {
-                    w.downcast_ref::<gtk4::Button>()
-                        .and_then(|b| b.child())
-                        .and_downcast::<gtk4::Label>()
-                        .is_some_and(|l| l.text() == format!("▸ {folder}"))
-                })
-        });
-        let button = widgets(&work.explorer.as_ref().unwrap().widget())
-            .into_iter()
-            .filter_map(|w| w.downcast::<gtk4::Button>().ok())
-            .find(|b| {
-                b.child()
-                    .and_downcast::<gtk4::Label>()
-                    .is_some_and(|l| l.text() == format!("▸ {folder}"))
-            })
-            .unwrap();
-        button.emit_clicked();
+        wait_for(|| explorer_folder(&work, folder).is_some());
+        explorer_folder(&work, folder).unwrap().emit_clicked();
         settle();
     }
     capture(&work.window, &output.join("workspace.png"));

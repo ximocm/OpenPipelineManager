@@ -14,8 +14,12 @@ pub(super) fn settle() {
 }
 
 pub(super) fn capture(window: &impl IsA<gtk4::Window>, path: &Path) {
+    capture_widget(window.as_ref(), path);
+}
+
+pub(super) fn capture_widget(widget: &impl IsA<Widget>, path: &Path) {
     settle();
-    let window = window.as_ref();
+    let window = widget.as_ref();
     assert!(window.is_mapped());
     let snapshot = gtk4::Snapshot::new();
     gtk4::WidgetPaintable::new(Some(window)).snapshot(
@@ -23,7 +27,7 @@ pub(super) fn capture(window: &impl IsA<gtk4::Window>, path: &Path) {
         window.width() as f64,
         window.height() as f64,
     );
-    let renderer = gtk4::gsk::Renderer::for_surface(&window.surface().unwrap()).unwrap();
+    let renderer = gtk4::gsk::Renderer::for_surface(&window.native().unwrap().surface().unwrap()).unwrap();
     renderer
         .render_texture(&snapshot.to_node().expect("window frame"), None)
         .save_to_png(path)
@@ -54,7 +58,7 @@ pub(super) fn key(canvas: &PipelineCanvas, key: gtk4::gdk::Key) {
     ));
 }
 
-fn drag(canvas: &PipelineCanvas, world: (f64, f64), delta: (f64, f64)) {
+pub(super) fn drag(canvas: &PipelineCanvas, world: (f64, f64), delta: (f64, f64)) {
     let controllers = canvas.widget().observe_controllers();
     let gesture = (0..controllers.n_items())
         .filter_map(|i| controllers.item(i))

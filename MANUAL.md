@@ -73,7 +73,11 @@ a work window to explicitly adopt a revised definition (changed steps lose
 their completion state, kept parameter values are reconciled). Work keeps
 working even if the library file was moved or deleted.
 
-The left explorer supports creating files/folders, uploading files, renaming, deleting, and moving items by drag and drop. Double click a text, FASTA, YAML, JSON, shell, or image file to open it in a center tab.
+The left explorer supports creating files/folders, uploading files, renaming, deleting, and moving items by drag and drop. Open a text, FASTA, YAML, JSON, shell, or image file from the tree to show it in a center tab. Pipeline, file and image tabs share the center pane's top header. A new Work starts with its pipeline tab alone; file tabs appear when you open a file or explicitly choose New. Closing the final file in Work returns to Pipeline.
+
+Use **View → Toggle Inspector**, **Ctrl+Shift+I**, or the close button in its header to hide/show the inspector. Selecting a card reopens it at its previous width; background refresh does not reopen a hidden inspector.
+
+Use **View → Show All Files**, **Show Hidden Files** or **Refresh Files** to control the tree. The two filters are independent and apply only to the current window; refresh keeps their values. **Ctrl+Shift+.** toggles hidden files; **Ctrl+B** shows or hides the explorer. The folder header offers New file and New folder, and the tree highlights the active document.
 
 ## 4. Importing and Exporting Pipelines
 
@@ -129,8 +133,11 @@ installation requirements, independent tool use, and example pipelines.
 
 Structural editing belongs to the Design window: select a step and use the
 edit button to create or change steps. A work window shows the same step
-detail but only lets you change values (inputs and options); its graph is
-read-only. You can configure in Design:
+detail and lets you change values (inputs and options) and move cards, including
+while a run is active. Work saves card positions immediately in its own
+`.pipeline-manager/run.json` definition copy; the library and other work folders
+are unchanged. Commands, declarations and connections are edited in Design.
+You can configure in Design:
 
 - **Step id**: stable identifier used in dependencies.
 - **Name**: display name.
@@ -242,6 +249,10 @@ read long lines. Turn Follow off while reading earlier output. These controls
 affect the display only; log files and pipeline commands are unchanged.
 
 Running happens in a work window. Use **Run selected** to run selected steps. If no steps are selected, the app runs pending steps in dependency order. Use each step card or the right panel to run one step. Input selections and option values are per work folder: the same library pipeline can run in several work folders without sharing values, logs, outputs, or completion state.
+
+Use **View → Toggle Logs / Console** or **Ctrl+J**
+to show/hide the console. Hiding it preserves its height, log buffer, Follow
+and Wrap settings; logging and execution continue in the background.
 
 Work state is stored in:
 

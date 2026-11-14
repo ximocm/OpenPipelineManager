@@ -51,8 +51,15 @@ impl TabBar {
         while let Some(child) = self.root.first_child() {
             self.root.remove(&child);
         }
+        if manager.is_placeholder() {
+            self.root.set_visible(false);
+            return;
+        }
         for index in 0..manager.len() {
             let button = gtk::Button::with_label(&manager.title(index));
+            if let Some(path) = &manager.tabs()[index].path {
+                button.set_tooltip_text(Some(&path.display().to_string()));
+            }
             if index == manager.active_index() && editor_focused {
                 // §37: el tab activo va resaltado.
                 button.add_css_class("opm-active-tab");
