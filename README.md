@@ -6,7 +6,7 @@
 
 A native desktop workbench for designing, validating, and running local pipelines.
 
-[![Version](https://img.shields.io/badge/version-0.3.0-1565c0?style=flat-square)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.3.1-1565c0?style=flat-square)](CHANGELOG.md)
 [![Rust](https://img.shields.io/badge/Rust-stable-000000?style=flat-square&logo=rust)](BUILDING.md)
 [![GTK4](https://img.shields.io/badge/GTK4-native_desktop-76548f?style=flat-square)](docs/UI_DESIGN.md)
 [![CI](https://github.com/ximocm/OpenPipelineManager/actions/workflows/ci.yml/badge.svg)](https://github.com/ximocm/OpenPipelineManager/actions/workflows/ci.yml)

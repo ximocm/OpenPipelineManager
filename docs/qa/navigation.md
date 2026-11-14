@@ -1,7 +1,7 @@
 # Workspace navigation review — 2026-11-14
 
-Native GTK4/Cairo changes on `feat/explorer-navigation`, collected under
-Unreleased. No dependency, pipeline format or execution engine changes.
+Native GTK4/Cairo changes on `feat/explorer-navigation`, included in
+0.3.1. No dependency, pipeline format or execution engine changes.
 
 ## Design and scope
 

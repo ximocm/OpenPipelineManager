@@ -6,14 +6,23 @@ The format follows Keep a Changelog-style sections, and the project uses semanti
 
 ## Unreleased
 
+## 0.3.1 - 2026-11-14
+
+### Added
+
+- Collapsible inspector with a header close button and View / Ctrl+Shift+I toggle. Selecting a card reopens it at its previous width; background refresh leaves it hidden.
+- Plain Toggle Logs / Console action in View, with Ctrl+J, matching Toggle Explorer without a checkbox or toolbar button. Hiding the pane retains its height, contents and reading settings while execution and logging continue.
+
 ### Changed
 
-- Add a collapsible inspector with a header close button and View / Ctrl+Shift+I toggle. Selecting a card reopens it at its previous width, while background refresh leaves it hidden.
-- Cards can move in both Design and Work, including during execution. Work positions save immediately to its embedded `run.json` copy without modifying the library or another work folder.
-- Add a plain Toggle Logs / Console action to View, with Ctrl+J, matching Toggle Explorer without a checkbox or toolbar button. Hiding the pane retains its size and contents and does not stop execution or logging.
-- Stop exposing an automatic untitled document. The first file reuses the internal blank buffer; explicit New and modified drafts remain separate. Closing the last file in Work returns to the pipeline.
-- Move pipeline, document and image tabs into the center pane header, replacing the repeated Pipeline/Workspace title while preserving pane widths and split positions.
+- Move pipeline, document and image tabs into the center pane header, replacing the repeated Pipeline/Workspace title while preserving pane widths and split positions. Narrow windows scroll to reveal the active tab without changing editor focus.
 - Refine the file navigator with a compact folder header, native creation actions, symbolic chevrons/icons and a subtle active-document highlight. Show All Files, Show Hidden Files and Refresh Files now live in View; filters remain independent per window and survive refresh.
+- Refresh the real GTK screenshot gallery and add reproducible checks for navigation, pane toggles, focus, small windows, high contrast and large text.
+
+### Fixed
+
+- Allow card movement in both Design and Work, including during execution. Work positions save immediately to its embedded `run.json` definition copy without modifying the library, another work folder or step execution state.
+- Avoid exposing an automatic untitled document. The first file reuses the internal blank buffer; explicit New and edited drafts retain their own tabs and undo/redo history. Closing the final file in Work returns to Pipeline.
 
 ## 0.3.0 - 2026-11-12
 
