@@ -211,6 +211,48 @@ fn explorer_navigation_review() {
     }
     assert!(bounds.y() >= -1.0 && bounds.y() + bounds.height() <= scroll.height() as f32 + 1.0,
         "active tab is vertically clipped: {bounds:?}");
+
+    // New pipeline must spawn a separate Design window from Work. Cancelling
+    // and accepting the native prompt must both preserve the Work and its file.
+    let run_file = root.join(".pipeline-manager/run.json");
+    let saved_work = std::fs::read(&run_file).unwrap();
+    let work_title = work.window.title();
+    let window_count = app.windows().len();
+    assert!(actions.is_action_enabled("new-pipeline"));
+    let prompt = || gtk4::Window::list_toplevels().into_iter()
+        .filter_map(|w| w.downcast::<gtk4::Window>().ok())
+        .find(|w| w.title().as_deref() == Some("New pipeline")).unwrap();
+    actions.activate_action("new-pipeline", None);
+    settle();
+    let dialog = prompt();
+    assert_eq!(dialog.transient_for().as_ref(), Some(work.window.upcast_ref()));
+    capture(&dialog, &output.join("new-pipeline-prompt.png"));
+    widgets(dialog.upcast_ref()).into_iter()
+        .filter_map(|w| w.downcast::<gtk4::Button>().ok())
+        .find(|b| b.label().as_deref() == Some("Cancelar")).unwrap().emit_clicked();
+    settle();
+    assert_eq!(app.windows().len(), window_count);
+    actions.activate_action("new-pipeline", None);
+    settle();
+    let dialog = prompt();
+    widgets(dialog.upcast_ref()).into_iter()
+        .find_map(|w| w.downcast::<gtk4::Entry>().ok()).unwrap().set_text("New analysis");
+    // Activate the native default action, also used when pressing Enter.
+    dialog.default_widget().unwrap().activate();
+    wait_for(|| app.windows().iter().any(|w|
+        w.title().is_some_and(|title| title.contains("New analysis.pipeline"))));
+    assert_eq!(app.windows().len(), window_count + 1);
+    let new_design = app.windows().into_iter()
+        .find(|w| w.title().is_some_and(|t| t.contains("New analysis.pipeline"))).unwrap();
+    capture(&new_design, &output.join("new-pipeline-design.png"));
+    assert!(work.window.is_visible());
+    assert_eq!(work.window.title(), work_title);
+    assert_eq!(std::fs::read(&run_file).unwrap(), saved_work);
+    assert!(work.tabs.borrow().tabs().iter().any(|tab| tab.path.as_ref() == Some(&notes)));
+    assert!(project::library().list().is_empty());
+    disconnect_window_actions(&new_design.clone().downcast::<ApplicationWindow>().unwrap());
+    new_design.destroy();
+
     let folder = build_window(&app, WindowScope::Folder(root), &[]);
     assert!(!checked(&group(&folder), "show-all-files"));
     assert!(!checked(&group(&folder), "show-hidden-files"));

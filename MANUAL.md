@@ -45,6 +45,11 @@ native file in the application library:
                                   defaults, and canvas layout (UTF-8 JSON)
 ```
 
+**Project → New pipeline** is also available from a Work window, including
+while it is running. It opens a separate Design window and keeps the Work,
+its open files, logs and execution in the original window. The new design is
+saved to the library only when you choose Save pipeline.
+
 The library location is shown in the app and resolves to `OPM_PIPELINES_DIR` if
 set, otherwise the per-OS data directory (`~/.local/share/opm/pipelines` on
 Linux, `%APPDATA%\opm\pipelines` on Windows, `~/Library/Application Support/opm/pipelines`
