@@ -1175,8 +1175,8 @@ impl AppCmds {
     }
 
     /// Aplica `doc` a ESTA ventana si es de diseño; si no, abre una ventana
-    /// de diseño nueva con él (los flujos de librería son spawnables desde
-    /// standalone/folder; el gate ya los deshabilita en ventanas de trabajo).
+    /// de diseño nueva con él. New pipeline también llega aquí desde Work:
+    /// su store, archivos abiertos y ejecución permanecen en la ventana original.
     fn present_design(&self, app: &Application, doc: PipelineDoc, saved_name: Option<String>) {
         if self.scope.is_design() {
             self.set_design(doc, saved_name);
