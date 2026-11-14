@@ -1,7 +1,7 @@
 # Workspace navigation review — 2026-11-14
 
 Native GTK4/Cairo changes on `feat/explorer-navigation`, collected under
-Unreleased. No dependency, pipeline format or execution changes.
+Unreleased. No dependency, pipeline format or execution engine changes.
 
 ## Design and scope
 
@@ -17,12 +17,23 @@ Unreleased. No dependency, pipeline format or execution changes.
   options are native checked actions, independent per window, retained on
   refresh and disabled in windows without an explorer. Ctrl+Shift+. toggles
   hidden files; Ctrl+B keeps its existing sidebar behavior.
+- Cards can move in Work even when structural editing is disabled. Work saves
+  positions in its own embedded definition; a store isolation test verifies
+  that the library and a second work folder are unchanged, including when the
+  first work is running. A real GTK drag is saved and verified after reopening.
+- The checked Logs / Console action (Ctrl+J and toolbar terminal icon) hides the
+  pane without stopping logging. Its previous height, buffer and reading
+  controls are retained. The GTK test checks icon/menu state synchronization,
+  lines received while hidden, and restoration of the divider position.
+- Initial untitled buffers stay internal. The first real file replaces the
+  placeholder; New explicitly creates a document. Edited drafts retain their
+  undo/redo history, and closing the final file in Work returns to Pipeline.
 - Keep lazy directory loading, ignored paths, symlink restrictions, context
   operations and internal/external drag and drop. No filesystem policy changed.
 
 ## Verification
 
-All required local checks passed: 396 core tests, 190 UI tests (11 graphical or
+All required local checks passed: 397 core tests, 192 UI tests (11 graphical or
 network tests ignored by default), release build, and 22 release-policy tests.
 
 The explicit `explorer_navigation_review` GTK test passed in light, dark,
@@ -75,3 +86,5 @@ python3 scripts/review-workspace.py --mode light --mode dark \
 | High contrast focus | Large text |
 | --- | --- |
 | ![Keyboard focus on the active file](evidencias/NAV-contrast.png) | ![Navigation with Sans 22](evidencias/NAV-large.png) |
+
+![Expanded workspace with the console hidden](evidencias/NAV-console-hidden.png)

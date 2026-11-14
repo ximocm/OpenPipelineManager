@@ -148,6 +148,7 @@ Editing a library pipeline does not silently change existing work. Adopt a revis
 | Action | Interaction |
 | --- | --- |
 | Select a step | Click a card, or use **Left / Right** |
+| Move a card | Drag its body in Design or Work; Work saves its own layout automatically |
 | Toggle its run checkbox | Click the checkbox, or press **Space** |
 | Pan | Drag the background, or use **Alt+arrows** |
 | Zoom / fit | **Ctrl+scroll**, **+ / −**, or **Home / Fit** |
@@ -155,6 +156,7 @@ Editing a library pipeline does not silently change existing work. Adopt a revis
 | Reconnect / remove | Select a dependency, then drag its destination port or press **Delete** |
 | Leave the tool brush | **Escape** |
 | Save | **Ctrl+S**, according to the visible document |
+| Show / hide logs | **Ctrl+J**, the toolbar terminal icon, or **View → Logs / Console** |
 
 ## Validation and execution
 

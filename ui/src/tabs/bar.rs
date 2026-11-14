@@ -51,6 +51,10 @@ impl TabBar {
         while let Some(child) = self.root.first_child() {
             self.root.remove(&child);
         }
+        if manager.is_placeholder() {
+            self.root.set_visible(false);
+            return;
+        }
         for index in 0..manager.len() {
             let button = gtk::Button::with_label(&manager.title(index));
             if let Some(path) = &manager.tabs()[index].path {

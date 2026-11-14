@@ -107,7 +107,7 @@ enum Press {
     Reconnect(String, String, (f64, f64)),
     /// Tarjeta → seleccionar paso + posible movimiento.
     Node(String, (f64, f64)),
-    /// Tarjeta con ediciones deshabilitadas: SOLO selección (sin drag).
+    /// Brush placement pending without a drag interaction.
     Select,
     /// Vacío → pan.
     Pan,
@@ -292,22 +292,16 @@ impl CanvasState {
             }
         }
 
-        // 3) Tarjeta → seleccionar paso + posible movimiento (el movimiento
-        //    SOLO con ediciones habilitadas: en ventana de trabajo el grafo
-        //    es de solo lectura).
+        // Layout is independent of structural editing: cards can always move,
+        // including in Work or during execution. Only connections use edits().
         if let Some(index) = model.node_at(world) {
             let node = &model.nodes[index];
             let id = node.id.clone();
             let offset = (world.0 - node.position.0, world.1 - node.position.1);
-            let editable = self.callbacks.edits();
             drop(model);
             *self.selected_edge.borrow_mut() = None;
             (self.callbacks.on_select)(id.clone());
-            self.press.set(Some(if editable {
-                Press::Node(id, offset)
-            } else {
-                Press::Select
-            }));
+            self.press.set(Some(Press::Node(id, offset)));
             return;
         }
 
@@ -1163,7 +1157,7 @@ impl PipelineCanvas {
         help.set_tooltip_text(Some("Canvas controls and link types"));
         help.update_property(&[gtk::accessible::Property::Label("Canvas controls and link types")]);
         let popover = gtk::Popover::new();
-        let text = gtk::Label::new(Some("Drag background to pan\nCtrl+scroll or + / − to zoom\nHome to fit the pipeline\nLeft / Right to select a step\nSpace to toggle its run checkbox\n\nLinks\nGray thin / chevron: step order\nTeal / open arrow: output flow\nPurple / filled arrow: dependency\n\nIn Design, drag cards to move them and drag any of the four ports to connect steps. Links use top/bottom ports for vertical layouts and side ports for horizontal layouts. Select a dependency and press Delete to remove it, or drag its destination port to reconnect it. Escape returns from the tool brush to selection."));
+        let text = gtk::Label::new(Some("Drag background to pan\nCtrl+scroll or + / − to zoom\nHome to fit the pipeline\nLeft / Right to select a step\nSpace to toggle its run checkbox\n\nLinks\nGray thin / chevron: step order\nTeal / open arrow: output flow\nPurple / filled arrow: dependency\n\nDrag cards to move them in Design or Work. Work saves positions in its own folder. In Design, drag any of the four ports to connect steps. Links use top/bottom ports for vertical layouts and side ports for horizontal layouts. Select a dependency and press Delete to remove it, or drag its destination port to reconnect it. Escape returns from the tool brush to selection."));
         text.set_wrap(true);
         text.set_max_width_chars(38);
         text.set_xalign(0.0);
@@ -1326,6 +1320,20 @@ mod tests {
         *state.selected_edge.borrow_mut() = Some(("removed".into(), "s1".into()));
         state.update(data_with("s1", (80.0, 120.0)));
         assert!(state.selected_edge.borrow().is_none());
+    }
+
+    #[test]
+    fn node_layout_can_move_when_structural_edits_are_disabled() {
+        let moves = Rc::new(RefCell::new(Vec::new()));
+        let mut state = state_recording_moves(&moves);
+        state.callbacks.edits_enabled = Rc::new(|| false);
+        state.update(data_with("s1", (80.0, 120.0)));
+        let transform = ViewTransform { zoom: 0.5, pan_x: 17.0, pan_y: -13.0 };
+        state.transform.set(transform);
+        state.drag_begin(transform.to_screen((180.0, 175.0)));
+        state.drag_update((50.0, 25.0));
+        state.drag_end();
+        assert_eq!(*moves.borrow(), vec![("s1".into(), 180.0, 170.0)]);
     }
 
     #[test]

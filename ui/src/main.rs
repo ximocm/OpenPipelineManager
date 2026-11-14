@@ -178,6 +178,8 @@ struct AppCmds {
     step_panel: Option<Rc<StepPanel>>,
     counters: Option<Rc<Counters>>,
     logs: Option<Rc<LogsPanel>>,
+    logs_paned: Option<Paned>,
+    logs_extent: Cell<i32>,
     /// Botones del toolbar §6 (su sensibilidad la fija `apply_running_ui`).
     run_btn: Option<gtk4::Button>,
     stop_btn: Option<gtk4::Button>,
@@ -199,6 +201,13 @@ impl AppCmds {
     /// Sincroniza vistas y título con el tab activo (cambio de tab, open,
     /// undo/redo, save) y repinta el highlighting.
     fn reload_active(&self) {
+        if self.tabs.borrow().is_placeholder() && *self.center_view.borrow() == CenterView::Editor {
+            if self.pipeline_btn.is_some() {
+                self.show_view(CenterView::Pipeline);
+            } else if self.stack.child_by_name("welcome").is_some() {
+                self.show_view(CenterView::Welcome);
+            }
+        }
         {
             let tabs = self.tabs.borrow();
             let tab = tabs.active();
@@ -387,7 +396,12 @@ impl AppCmds {
         let (title, mode) = {
             let tabs = self.tabs.borrow();
             let index = tabs.active_index();
-            (tabs.title(index), tabs.active().mode)
+            match &*self.center_view.borrow() {
+                CenterView::Pipeline => ("Pipeline".to_owned(), EditMode::Markdown),
+                CenterView::Image(path) => (imageview::page_title(path), EditMode::Markdown),
+                _ if tabs.is_placeholder() => ("Files".to_owned(), EditMode::Markdown),
+                _ => (tabs.title(index), tabs.active().mode),
+            }
         };
         let text = match &self.scope {
             WindowScope::Standalone => format!("{title} — OPM"),
@@ -1569,9 +1583,7 @@ impl Commands for AppCmds {
     }
 
     fn new(&self) {
-        if *self.center_view.borrow() != CenterView::Welcome {
-            self.tabs.borrow_mut().new_tab();
-        }
+        self.tabs.borrow_mut().new_tab();
         // P2-10: tras crear la pestaña, la página visible vuelve al editor
         // (Ctrl+N en la página «Pipeline»/de imagen debe verse el resultado).
         self.show_view(CenterView::Editor);
@@ -1606,6 +1618,7 @@ impl Commands for AppCmds {
     }
 
     fn save(&self) {
+        if *self.center_view.borrow() == CenterView::Editor && self.tabs.borrow().is_placeholder() { return; }
         // Despacho por la página visible (paridad con `close_tab`, P2-10):
         // la página Pipeline de una ventana de Diseño guarda el documento de
         // diseño; el editor guarda la pestaña de texto; imágenes y la página
@@ -1664,6 +1677,7 @@ impl Commands for AppCmds {
     }
 
     fn save_as(&self) {
+        if *self.center_view.borrow() == CenterView::Editor && self.tabs.borrow().is_placeholder() { return; }
         match save_target(self.scope.is_design(), &self.center_view.borrow()) {
             SaveTarget::PipelineDoc => {
                 self.save_pipeline_doc(true);
@@ -1803,6 +1817,25 @@ impl Commands for AppCmds {
 
     fn refresh_files(&self) {
         self.refresh();
+    }
+
+    fn show_logs(&self, visible: bool) {
+        let (Some(pane), Some(logs)) = (&self.logs_paned, &self.logs) else { return; };
+        if visible == pane.end_child().is_some() { return; }
+        if visible {
+            pane.set_end_child(Some(&logs.widget()));
+            if self.logs_extent.get() > 0 {
+                pane.set_position((pane.height() - self.logs_extent.get()).max(0));
+            }
+        } else {
+            let extent = pane.height() - pane.position();
+            if extent > 0 { self.logs_extent.set(extent); }
+            pane.set_end_child(Option::<&Widget>::None);
+        }
+    }
+
+    fn logs_visible(&self) -> bool {
+        self.logs_paned.as_ref().is_some_and(|pane| pane.end_child().is_some())
     }
 
     /// Diseño: documento NUEVO — pide nombre y lo abre en una ventana de
@@ -2798,8 +2831,8 @@ fn build_window(app: &Application, scope: WindowScope, open_paths: &[PathBuf]) -
                 Rc::new(move |step_id, x, y| {
                     if let Some(me) = slot.borrow().as_ref().and_then(Weak::upgrade) {
                         // Diseño: SOLO el nodo movido en el layout del
-                        // documento (sucio hasta Save). El lienzo de trabajo
-                        // no mueve nodos (`edits_enabled` false).
+                        // documento (sucio hasta Save). Work saves only to
+                        // its own embedded definition in run.json.
                         if let Some(design) = me.design() {
                             design.borrow_mut().set_layout(&step_id, x, y);
                             // El layout es parte del documento: el ● de
@@ -2830,8 +2863,8 @@ fn build_window(app: &Application, scope: WindowScope, open_paths: &[PathBuf]) -
                 let slot = slot.clone();
                 Rc::new(move || {
                     // Ediciones estructurales SOLO en ventanas de diseño y
-                    // nunca en ejecución (§11 A12); en trabajo el lienzo es
-                    // de solo lectura (selección + checkbox).
+                    // nunca en ejecución (§11 A12). Moving cards remains
+                    // available and Work saves layout only in its local copy.
                     slot.borrow()
                         .as_ref()
                         .and_then(Weak::upgrade)
@@ -3058,6 +3091,12 @@ fn build_window(app: &Application, scope: WindowScope, open_paths: &[PathBuf]) -
             }
             toolbar.append(&run_btn);
             toolbar.append(&stop_btn);
+            let console = gtk4::ToggleButton::new();
+            console.set_icon_name("utilities-terminal-symbolic");
+            console.set_action_name(Some("win.show-logs"));
+            console.set_tooltip_text(Some("Show or hide Logs / Console (Ctrl+J)"));
+            console.update_property(&[gtk4::accessible::Property::Label("Logs / Console")]);
+            toolbar.append(&console);
             (Some(toolbar), Some(run_btn), Some(stop_btn), design_label)
         }
     } else {
@@ -3214,6 +3253,7 @@ fn build_window(app: &Application, scope: WindowScope, open_paths: &[PathBuf]) -
         explorer_panel = Some(panel);
         current = main_paned.upcast();
     }
+    let mut logs_paned = None;
     if let Some(logs) = &logs {
         let vertical = Paned::new(Orientation::Vertical);
         vertical.set_wide_handle(true);
@@ -3222,6 +3262,7 @@ fn build_window(app: &Application, scope: WindowScope, open_paths: &[PathBuf]) -
         vertical.set_resize_end_child(false);
         vertical.set_shrink_start_child(false);
         vertical.set_position((window.default_height() - 230).max(240));
+        logs_paned = Some(vertical.clone());
         current = vertical.upcast();
     }
     let content = current;
@@ -3279,6 +3320,8 @@ fn build_window(app: &Application, scope: WindowScope, open_paths: &[PathBuf]) -
         step_panel,
         counters,
         logs,
+        logs_paned,
+        logs_extent: Cell::new(0),
         run_btn,
         stop_btn,
         action_group: RefCell::new(None),

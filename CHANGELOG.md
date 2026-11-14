@@ -8,6 +8,9 @@ The format follows Keep a Changelog-style sections, and the project uses semanti
 
 ### Changed
 
+- Cards can move in both Design and Work, including during execution. Work positions save immediately to its embedded `run.json` copy without modifying the library or another work folder.
+- Add a checked Logs / Console toggle to View and the work toolbar, with Ctrl+J. Hiding the pane retains its size and contents and does not stop execution or logging.
+- Stop exposing an automatic untitled document. The first file reuses the internal blank buffer; explicit New and modified drafts remain separate. Closing the last file in Work returns to the pipeline.
 - Move pipeline, document and image tabs into the center pane header, replacing the repeated Pipeline/Workspace title while preserving pane widths and split positions.
 - Refine the file navigator with a compact folder header, native creation actions, symbolic chevrons/icons and a subtle active-document highlight. Show All Files, Show Hidden Files and Refresh Files now live in View; filters remain independent per window and survive refresh.
 

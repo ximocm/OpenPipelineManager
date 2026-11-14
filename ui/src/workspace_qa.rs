@@ -58,7 +58,7 @@ pub(super) fn key(canvas: &PipelineCanvas, key: gtk4::gdk::Key) {
     ));
 }
 
-fn drag(canvas: &PipelineCanvas, world: (f64, f64), delta: (f64, f64)) {
+pub(super) fn drag(canvas: &PipelineCanvas, world: (f64, f64), delta: (f64, f64)) {
     let controllers = canvas.widget().observe_controllers();
     let gesture = (0..controllers.n_items())
         .filter_map(|i| controllers.item(i))

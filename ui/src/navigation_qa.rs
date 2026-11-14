@@ -1,6 +1,6 @@
 //! Running GTK checks for header navigation and explorer View actions.
 use super::*;
-use crate::workspace_qa::{capture, capture_widget, settle, widgets};
+use crate::workspace_qa::{capture, capture_widget, drag, settle, widgets};
 use std::time::Instant;
 
 fn wait_for(mut ready: impl FnMut() -> bool) {
@@ -72,6 +72,40 @@ fn explorer_navigation_review() {
     let positions = pane_positions(&work);
     let size = (work.window.width(), work.window.height());
     let actions = group(&work);
+    assert!(work.tabs.borrow().is_placeholder());
+    assert!(!work.tab_bar.widget().is_visible());
+    assert!(!work.window.title().unwrap().contains("Sin título"));
+    let canvas = work.canvas.as_ref().unwrap();
+    let zoom = canvas.transform().zoom;
+    drag(canvas, (180.0, 175.0), (40.0, 20.0));
+    let saved = work.store.snapshot().visual_layout["create_message"];
+    assert!((saved.x - (80.0 + 40.0 / zoom)).abs() < 0.01);
+    let reopened = ProjectStore::new();
+    reopened.open_work(&root).unwrap();
+    assert_eq!(reopened.snapshot().visual_layout["create_message"], saved);
+
+    let console = widgets(work.window.upcast_ref()).into_iter()
+        .filter_map(|w| w.downcast::<gtk4::ToggleButton>().ok())
+        .find(|button| button.action_name().as_deref() == Some("win.show-logs")).unwrap();
+    assert!(console.is_active());
+    let logs = work.logs.as_ref().unwrap();
+    logs.show_step(Some("create_message"), "before hide\n");
+    let log_view = widgets(&logs.widget()).into_iter()
+        .find_map(|w| w.downcast::<gtk4::TextView>().ok()).unwrap();
+    let log_pane = work.logs_paned.as_ref().unwrap();
+    let log_height = log_pane.height() - log_pane.position();
+    console.emit_clicked();
+    settle();
+    assert!(!checked(&actions, "show-logs"));
+    assert!(log_pane.end_child().is_none());
+    logs.append_line("create_message", "while hidden\n");
+    capture(&work.window, &output.join("console-hidden.png"));
+    actions.activate_action("show-logs", None);
+    settle();
+    assert!(console.is_active());
+    assert_eq!(log_pane.height() - log_pane.position(), log_height);
+    let buffer = log_view.buffer();
+    assert!(buffer.text(&buffer.start_iter(), &buffer.end_iter(), false).contains("while hidden"));
     assert!(!has_file(explorer, ".session.md"));
     assert!(!has_file(explorer, "payload.bin"));
     assert!(!checked(&actions, "show-all-files"));
@@ -93,6 +127,8 @@ fn explorer_navigation_review() {
     actions.change_action_state("show-all-files", &false.to_variant());
     work.open_path(&notes);
     settle();
+    assert_eq!(work.tabs.borrow().len(), 1);
+    assert!(!work.tabs.borrow().is_placeholder());
     let selected = row_button(explorer, "Analysis notes.md");
     assert!(selected.parent().unwrap().state_flags().contains(gtk4::StateFlags::SELECTED));
     actions.activate_action("refresh-files", None);
@@ -159,6 +195,15 @@ fn explorer_navigation_review() {
     for action in ["show-all-files", "show-hidden-files", "refresh-files"] {
         assert!(!group(&standalone).is_action_enabled(action));
     }
+    assert!(!group(&standalone).is_action_enabled("show-logs"));
+    assert!(!group(&folder).is_action_enabled("show-logs"));
+    work.close_tab();
+    assert!(work.tabs.borrow().is_placeholder());
+    assert_eq!(*work.center_view.borrow(), CenterView::Pipeline);
+    work.new();
+    assert!(!work.tabs.borrow().is_placeholder());
+    assert_eq!(*work.center_view.borrow(), CenterView::Editor);
+    assert!(work.tab_bar.widget().is_visible());
     for cmds in [&standalone, &folder, &work] {
         disconnect_window_actions(&cmds.window);
         cmds.window.destroy();
