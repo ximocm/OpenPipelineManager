@@ -6,6 +6,11 @@ The format follows Keep a Changelog-style sections, and the project uses semanti
 
 ## Unreleased
 
+### Changed
+
+- Move pipeline, document and image tabs into the center pane header, replacing the repeated Pipeline/Workspace title while preserving pane widths and split positions.
+- Refine the file navigator with a compact folder header, native creation actions, symbolic chevrons/icons and a subtle active-document highlight. Show All Files, Show Hidden Files and Refresh Files now live in View; filters remain independent per window and survive refresh.
+
 ## 0.3.0 - 2026-11-12
 
 ### Added

@@ -73,7 +73,9 @@ a work window to explicitly adopt a revised definition (changed steps lose
 their completion state, kept parameter values are reconciled). Work keeps
 working even if the library file was moved or deleted.
 
-The left explorer supports creating files/folders, uploading files, renaming, deleting, and moving items by drag and drop. Double click a text, FASTA, YAML, JSON, shell, or image file to open it in a center tab.
+The left explorer supports creating files/folders, uploading files, renaming, deleting, and moving items by drag and drop. Open a text, FASTA, YAML, JSON, shell, or image file from the tree to show it in a center tab. Pipeline, file and image tabs share the center pane's top header.
+
+Use **View → Show All Files**, **Show Hidden Files** or **Refresh Files** to control the tree. The two filters are independent and apply only to the current window; refresh keeps their values. **Ctrl+Shift+.** toggles hidden files; **Ctrl+B** shows or hides the explorer. The folder header offers New file and New folder, and the tree highlights the active document.
 
 ## 4. Importing and Exporting Pipelines
 

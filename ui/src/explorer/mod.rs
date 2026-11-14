@@ -18,8 +18,7 @@
 //!   del proyecto (contenido propio `application/x-opm-path`) o importar
 //!   ficheros soltados desde el SO; la confirmación y la re-objetivación
 //!   viven en `main.rs` vía `on_drop`.
-//! - P2-13: la cabecera expone `Refresh` (más `Project ▸ Refresh`) que
-//!   relee el árbol a través de `on_refresh`.
+//! - View owns the per-window file filters and Refresh command.
 //! - §47.1/§47.5: los directorios se leen en una tarea aparte (un hilo por
 //!   lectura) y el resultado se integra en el bucle principal con
 //!   `glib::idle_add_once`: la UI jamás hace E/S y el árbol crece a demanda,
@@ -145,12 +144,14 @@ fn action_name(action: ExplorerAction) -> &'static str {
     }
 }
 
-/// Panel lateral del explorador (§14.3): cabecera con los toggles §14.4/§14.5
-/// y una lista de filas planas indentadas ([`Row`]) sobre el modelo puro.
+/// Native file navigator with a compact folder header and lazy tree rows.
 pub struct ExplorerPane {
     widget: gtk::Box,
+    header: gtk::Box,
     model: Arc<Mutex<TreeModel>>,
     store: gtk::gio::ListStore,
+    selection: gtk::SingleSelection,
+    active_path: Rc<RefCell<Option<PathBuf>>>,
     root: PathBuf,
 }
 
@@ -159,14 +160,12 @@ impl ExplorerPane {
     /// carga incremental (§47.5). `on_open(path)` abre un archivo activado;
     /// `on_action(acción, nodo)` ejecuta una operación §14.8 sobre el nodo
     /// del menú contextual (`None` = raíz del proyecto); `on_drop(drop,
-    /// carpeta)` resuelve los arrastres sobre una fila (P2-12) y
-    /// `on_refresh()` el botón Refresh de la cabecera (P2-13).
+    /// carpeta)` resuelve los arrastres sobre una fila (P2-12).
     pub fn new(
         root: &Path,
         on_open: Rc<dyn Fn(PathBuf)>,
         on_action: Rc<dyn Fn(ExplorerAction, Option<PathBuf>)>,
         on_drop: Rc<dyn Fn(ExplorerDrop, PathBuf)>,
-        on_refresh: Rc<dyn Fn()>,
     ) -> Self {
         let root = opm_fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
         let model: Arc<Mutex<TreeModel>> = Arc::new(Mutex::new(TreeModel::new(root.clone())));
@@ -175,27 +174,50 @@ impl ExplorerPane {
         let widget = gtk::Box::new(gtk::Orientation::Vertical, 0);
         widget.add_css_class("opm-explorer");
 
-        // Cabecera §14.4/§14.5: toggles por ventana + Refresh (P2-13: el
-        // MISMO flujo que Project ▸ Refresh, vía el coordinador).
-        let header = gtk::Box::new(gtk::Orientation::Vertical, 4);
-        header.set_margin_top(4);
-        header.set_margin_bottom(4);
-        header.set_margin_start(6);
-        header.set_margin_end(6);
-        let show_all = gtk::CheckButton::with_label("Show All Files");
-        let show_hidden = gtk::CheckButton::with_label("Show Hidden Files");
-        let refresh = gtk::Button::from_icon_name("view-refresh-symbolic");
-        refresh.update_property(&[gtk::accessible::Property::Label("Refresh project tree")]);
-        refresh.set_tooltip_text(Some("Reload the project tree"));
-        refresh.add_css_class("flat");
-        refresh.connect_clicked(move |_| on_refresh());
-        let options = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-        show_all.set_hexpand(true);
-        options.append(&show_all);
-        options.append(&refresh);
-        header.append(&options);
-        header.append(&show_hidden);
-        widget.append(&header);
+        let header = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+        header.add_css_class("opm-explorer-header");
+        let title = gtk::Label::new(Some(
+            root.file_name().and_then(|s| s.to_str()).unwrap_or("Files"),
+        ));
+        title.set_xalign(0.0);
+        title.set_hexpand(true);
+        title.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        title.set_tooltip_text(Some(&root.display().to_string()));
+        header.append(&title);
+        for (icon, label, action) in [
+            ("document-new-symbolic", "New file", ExplorerAction::NewFile),
+            ("folder-new-symbolic", "New folder", ExplorerAction::NewFolder),
+        ] {
+            let button = gtk::Button::from_icon_name(icon);
+            button.add_css_class("flat");
+            button.set_tooltip_text(Some(label));
+            button.update_property(&[gtk::accessible::Property::Label(label)]);
+            let on_action = on_action.clone();
+            button.connect_clicked(move |_| on_action(action, None));
+            header.append(&button);
+        }
+
+        let selection = gtk::SingleSelection::new(Some(store.clone()));
+        selection.set_autoselect(false);
+        selection.set_can_unselect(true);
+        let active_path: Rc<RefCell<Option<PathBuf>>> = Rc::new(RefCell::new(None));
+        // Rebuilding a lazy directory replaces row objects. Restore the active
+        // document when its row reappears, including after filtering/refresh.
+        store.connect_items_changed({
+            let weak = selection.downgrade();
+            let active_path = active_path.clone();
+            move |store, position, _, added| {
+                let Some(selection) = weak.upgrade() else { return; };
+                let active = active_path.borrow();
+                let Some(path) = active.as_deref() else { return; };
+                for index in position..position + added {
+                    if row_matches(store, index, path) {
+                        selection.set_selected(index);
+                        break;
+                    }
+                }
+            }
+        });
 
         // Menú contextual §14.8 sobre el nodo del click (None = raíz).
         let context_target: Rc<RefCell<Option<PathBuf>>> = Rc::new(RefCell::new(None));
@@ -219,10 +241,20 @@ impl ExplorerPane {
                 let label = gtk::Label::new(None);
                 label.set_xalign(0.0);
                 label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+                label.set_hexpand(true);
+                let arrow = gtk::Image::new();
+                arrow.set_pixel_size(12);
+                let icon = gtk::Image::new();
+                icon.set_pixel_size(16);
+                let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+                row.append(&arrow);
+                row.append(&icon);
+                row.append(&label);
                 let button = gtk::Button::new();
-                button.set_child(Some(&label));
+                button.set_child(Some(&row));
                 button.set_has_frame(false);
                 button.set_halign(gtk::Align::Fill);
+                button.add_css_class("opm-explorer-row");
 
                 // Un solo handler por widget (ListView recicla widgets): lee
                 // la fila vigente del ListItem en el momento del click.
@@ -359,27 +391,29 @@ impl ExplorerPane {
             let Some(button) = list_item.child().and_downcast::<gtk::Button>() else {
                 return;
             };
-            let Some(label) = button.child().and_downcast::<gtk::Label>() else {
-                return;
-            };
-            let arrow = if !row.expandable {
-                "  "
-            } else if row.expanded {
-                "▾ "
-            } else {
-                "▸ "
-            };
-            label.set_text(&format!("{arrow}{}", row.name));
+            let content = button.child().and_downcast::<gtk::Box>().unwrap();
+            let arrow = content.first_child().and_downcast::<gtk::Image>().unwrap();
+            let icon = arrow.next_sibling().and_downcast::<gtk::Image>().unwrap();
+            let label = icon.next_sibling().and_downcast::<gtk::Label>().unwrap();
+            arrow.set_icon_name(Some(if row.expanded { "pan-down-symbolic" } else { "pan-end-symbolic" }));
+            arrow.set_opacity(if row.expandable { 1.0 } else { 0.0 });
+            icon.set_icon_name(Some(if row.is_dir {
+                if row.is_symlink { "folder-symlink-symbolic" }
+                else if row.expanded { "folder-open-symbolic" }
+                else { "folder-symbolic" }
+            } else if crate::imageview::is_image_path(&row.path) {
+                "image-x-generic-symbolic"
+            } else { "text-x-generic-symbolic" }));
+            label.set_text(&row.name);
+            button.update_property(&[gtk::accessible::Property::Label(&row.name)]);
+            button.update_state(&[gtk::accessible::State::Expanded(
+                row.expandable.then_some(row.expanded),
+            )]);
             button.set_tooltip_text(Some(&row.path.display().to_string()));
             button.set_margin_start(row.depth as i32 * INDENT_PX);
         });
 
-        let selection = gtk::SingleSelection::new(Some(store.clone()));
-        // Sin selección automática: activar una fila es abrir/expandir, no
-        // seleccionar (§3.7: toda acción es explícita).
-        selection.set_autoselect(false);
-        selection.set_can_unselect(true);
-        let list = gtk::ListView::new(Some(selection), Some(factory));
+        let list = gtk::ListView::new(Some(selection.clone()), Some(factory));
         let scroll = gtk::ScrolledWindow::new();
         scroll.set_child(Some(&list));
         scroll.set_policy(gtk::PolicyType::Automatic, gtk::PolicyType::Automatic);
@@ -401,21 +435,16 @@ impl ExplorerPane {
         scroll.add_controller(gesture);
         widget.append(&scroll);
 
-        // §14.4/§14.5: cambios de filtro re-renderizan sin releer (§47.5).
-        wire_filter(&show_all, &model, &store, |filters, active| {
-            filters.show_all = active
-        });
-        wire_filter(&show_hidden, &model, &store, |filters, active| {
-            filters.show_hidden = active
-        });
-
         // Raíz del proyecto: primera lectura a demanda (§47.5).
         request_load(&model, &store, root.clone());
 
         Self {
             widget,
+            header,
             model,
             store,
+            selection,
+            active_path,
             root,
         }
     }
@@ -423,6 +452,34 @@ impl ExplorerPane {
     /// Widget raíz del panel, para insertarlo en el `Paned` de la ventana.
     pub fn widget(&self) -> gtk::Widget {
         self.widget.clone().upcast()
+    }
+
+    pub fn header(&self) -> gtk::Widget {
+        self.header.clone().upcast()
+    }
+
+    pub fn set_show_all(&self, visible: bool) {
+        self.set_filter(|filters| filters.show_all = visible);
+    }
+
+    pub fn set_show_hidden(&self, visible: bool) {
+        self.set_filter(|filters| filters.show_hidden = visible);
+    }
+
+    fn set_filter(&self, apply: impl FnOnce(&mut ExplorerFilters)) {
+        let mut model = lock(&self.model);
+        let mut filters = model.filters();
+        apply(&mut filters);
+        model.set_filters(filters);
+        rebuild(&self.store, &model);
+    }
+
+    pub fn set_active_path(&self, path: Option<&Path>) {
+        if self.active_path.borrow().as_deref() == path { return; }
+        *self.active_path.borrow_mut() = path.map(Path::to_path_buf);
+        let index = path.and_then(|path|
+            (0..self.store.n_items()).find(|&i| row_matches(&self.store, i, path)));
+        self.selection.set_selected(index.unwrap_or(gtk::INVALID_LIST_POSITION));
     }
 
     /// Recarga el árbol tras operaciones §14.8. Conserva los filtros.
@@ -490,22 +547,9 @@ fn current_row(list_item: &gtk::ListItem) -> Option<Row> {
     Some(row)
 }
 
-/// Conecta un toggle §14.4/§14.5: actualiza el filtro y re-renderiza.
-fn wire_filter(
-    check: &gtk::CheckButton,
-    model: &Arc<Mutex<TreeModel>>,
-    store: &gtk::gio::ListStore,
-    apply: fn(&mut ExplorerFilters, bool),
-) {
-    let model = model.clone();
-    let store = store.clone();
-    check.connect_toggled(move |button| {
-        let mut model = lock(&model);
-        let mut filters = model.filters();
-        apply(&mut filters, button.is_active());
-        model.set_filters(filters);
-        rebuild(&store, &model);
-    });
+fn row_matches(store: &gtk::gio::ListStore, index: u32, path: &Path) -> bool {
+    store.item(index).and_downcast::<glib::BoxedAnyObject>()
+        .is_some_and(|item| item.borrow::<Row>().path == path)
 }
 
 /// Expande/colapsa `dir` y pide su lectura si hace falta (§47.5).
