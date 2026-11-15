@@ -10,10 +10,12 @@ The format follows Keep a Changelog-style sections, and the project uses semanti
 
 - Theme picker under View → Theme: a submenu with Light, Dark and Follow system radio options. The choice is saved between sessions, applies to every open window at once and follows desktop theme changes while on Follow system.
 - Tool definitions accept boolean fields and optional argument groups around optional inputs, so registries can describe on/off flags and optional reference files such as the FastQC 0.13.0 descriptor.
+- Delete/Backspace on the canvas removes the selected dependency arrow or, when a card is selected, its step (Design). Deleting a card with configured inputs, outputs, parameters or links — or steps that depend on it — asks for confirmation first; a plain card is removed directly.
 
 ### Fixed
 
 - Marketplace catalog and installed tool listings load every readable definition even when one tool file is invalid: the broken entry is listed with its error instead of replacing the whole list.
+- Canvas card control: clicking a card now always moves that card and dragging empty space always pans. The drag gesture resolved the press of the previous interaction (GTK dispatches the drag controller before the click controller), which panned the canvas when grabbing cards, teleported the selected card while panning and started the wrong interaction when dragging a port. Each drag now resolves its own press, so port-to-port dependency arrows connect reliably.
 
 ## 0.3.2 - 2026-11-14
 

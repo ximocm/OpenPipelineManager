@@ -121,11 +121,14 @@ to zoom. **Fit** (or **Home**) brings the pipeline into view without moving
 its saved nodes. **Left / Right** selects steps and **Space** toggles the
 selected step's run checkbox. **Alt+arrows** pans with the keyboard. The
 information button beside Fit explains the controls and the three link types.
-Each card has top, bottom, left and right connection ports. Drag from any port
-to another step to add a dependency. Links choose facing ports from the nodes'
-positions, supporting vertical and horizontal layouts without an orientation
-setting. Select a dependency before dragging its destination port to reconnect
-it. These gestures edit dependencies only in Design.
+Each card has top, bottom, left and right connection ports. Drag from one
+card's port to another card or one of its ports to add a dependency arrow.
+Links choose facing ports from the nodes' positions, supporting vertical and
+horizontal layouts without an orientation setting. Select a dependency before
+dragging its destination port to reconnect it, and press **Delete** to remove
+it. Press **Delete** on a selected card to remove its step; when the step has
+configured inputs, outputs, parameters or links, the app asks for
+confirmation first. These gestures edit dependencies and steps only in Design.
 The selected step's command is selectable and wraps in the inspector.
 
 Reusable tool definitions and ready-to-use pipelines are published in the
@@ -216,7 +219,7 @@ outputs:
     path: work/normalized/data.csv
 ```
 
-The canvas uses continuous lines for all three link types: thin gray lines with chevrons for pipeline order, teal lines with open arrowheads for output-to-input links, and purple lines with filled arrowheads for explicit dependencies (selectable; Delete removes the dependency).
+The canvas uses continuous lines for all three link types: thin gray lines with chevrons for pipeline order, teal lines with open arrowheads for output-to-input links, and purple lines with filled arrowheads for explicit dependencies (selectable; Delete removes the dependency or the selected card).
 
 ## 8. Options and Selectors
 

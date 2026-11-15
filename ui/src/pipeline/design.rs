@@ -294,6 +294,34 @@ impl DesignState {
         Ok(())
     }
 
+    /// Borra un paso y todo lo que de él cuelga: su entrada de layout y de
+    /// estado, las dependencias entrantes y los enlaces `source_step` de
+    /// inputs de otros pasos (ambos campos del enlace, para no dejar la
+    /// pareja incompleta que la validación rechaza). Solo diseño: el store
+    /// de trabajo no tiene borrado de pasos (A12).
+    pub fn remove_step(&mut self, step_id: &str) -> Result<(), StoreError> {
+        let before = self.doc.pipeline.steps.len();
+        self.doc.pipeline.steps.retain(|step| step.id != step_id);
+        if self.doc.pipeline.steps.len() == before {
+            return Err(StoreError::UnknownStep(step_id.to_string()));
+        }
+        self.doc.layout.remove(step_id);
+        self.states.remove(step_id);
+        for step in &mut self.doc.pipeline.steps {
+            step
+                .dependencies
+                .retain(|dependency| dependency != step_id);
+            for input in &mut step.inputs {
+                if input.source_step.as_deref() == Some(step_id) {
+                    input.source_step = None;
+                    input.source_output = None;
+                }
+            }
+        }
+        self.dirty = true;
+        Ok(())
+    }
+
     /// Posición de un nodo movido (SOLO el nodo dado; ensucia el layout).
     pub fn set_layout(&mut self, step_id: &str, x: f64, y: f64) {
         self.doc.layout.insert(step_id.to_owned(), Position { x, y });
@@ -669,6 +697,47 @@ mod tests {
             .update_step("fantasma", step("x"))
             .unwrap_err();
         assert!(matches!(err, StoreError::UnknownStep(_)), "{err:?}");
+    }
+
+    /// Borrar un paso elimina su layout/estado, las dependencias entrantes
+    /// y los enlaces `source_step` de inputs de otros pasos (ambos campos
+    /// del enlace) y ensucia el documento; un id desconocido es error.
+    #[test]
+    fn borrar_un_paso_limpiando_layout_estados_y_referencias() {
+        let mut design = DesignState::new("borrar");
+        design.create_step(step("s1")).unwrap();
+        design.create_step(step("s2")).unwrap();
+        let mut s3 = step("s3");
+        let mut input = s3.parameters[0].clone();
+        input.key = "archivo".to_owned();
+        input.source_step = Some("s1".to_owned());
+        input.source_output = Some("out".to_owned());
+        s3.inputs = vec![input];
+        s3.dependencies = vec!["s1".to_owned(), "s2".to_owned()];
+        design.create_step(s3).unwrap();
+        design.toggle_selected("s1");
+        design.set_layout("s1", 10.0, 20.0);
+        design.mark_saved("borrar");
+
+        let err = design.remove_step("desconocido").unwrap_err();
+        assert!(matches!(err, StoreError::UnknownStep(_)), "{err:?}");
+        assert!(!design.dirty(), "el intento fallido no ensucia");
+
+        design.remove_step("s1").unwrap();
+        assert!(design.dirty());
+        assert!(design.step("s1").is_none());
+        assert!(!design.state_of("s1").selected, "el estado del paso borrado desaparece");
+        assert!(design.doc().layout.get("s1").is_none());
+        assert_eq!(
+            design.steps().iter().map(|s| s.id.as_str()).collect::<Vec<_>>(),
+            vec!["s2", "s3"]
+        );
+        let s3 = design.step("s3").unwrap();
+        assert_eq!(s3.dependencies, vec!["s2".to_owned()], "la dependencia entrante a s1 desaparece");
+        assert!(
+            s3.inputs[0].source_step.is_none() && s3.inputs[0].source_output.is_none(),
+            "el enlace de input no deja la pareja source_step/source_output incompleta"
+        );
     }
 
     /// Validación de diseño: conserva los issues estructurales y descarta los

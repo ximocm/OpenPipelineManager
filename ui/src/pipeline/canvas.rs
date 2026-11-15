@@ -4,11 +4,20 @@
 //! la transformada única, la clasificación de aristas y los hit-tests vive
 //! ahí). Aquí se añade:
 //!
-//! - gestos: clic (selección de paso/checkbox/arista), drag de nodo con
-//!   persistencia SOLO del nodo movido (`store.set_layout`), pan (arrastrar
-//!   el vacío), zoom con ctrl+rueda anclado al cursor, arrastre nodo→nodo
-//!   para conectar y reconectar por el extremo de destino (remove+add);
-//! - Delete/Backspace sobre una arista de dependencia seleccionada (A9);
+//! - gestos: UN solo `GestureDrag` por interacción — el press se resuelve
+//!   dentro de `drag-begin` (que GTK emite en el propio botón pulsado, no
+//!   tras un umbral). Con un `GestureClick` aparte, el orden de reparto de
+//!   controladores (`g_list_prepend` = último añadido primero) emitía
+//!   `drag-begin` ANTES que `pressed`, de modo que cada arrastre consumía
+//!   el `Press` del gesto anterior: pulsar una tarjeta paneleaba el lienzo
+//!   y arrastrar el vacío teletransportaba la tarjeta recién pulsada;
+//! - drag de nodo con persistencia SOLO del nodo movido (`store.set_layout`),
+//!   pan (arrastrar el vacío), zoom con ctrl+rueda anclado al cursor,
+//!   arrastre puerto→nodo para conectar y reconectar por el extremo de
+//!   destino (remove+add);
+//! - Delete/Backspace sobre una arista de dependencia seleccionada (A9) o
+//!   sobre la tarjeta seleccionada (`on_delete_step`; el integrador avisa
+//!   si el paso tiene configuración extra);
 //! - refresco animado del borde ámbar mientras hay pasos `running` (timer
 //!   propio con `Weak` — al morir el estado el timer se auto-detiene,
 //!   §11 A12);
@@ -78,6 +87,9 @@ pub struct CanvasCallbacks {
     /// Reconexión del extremo de destino: remove+add — saca `old_source` de
     /// `old_target` y lo mete en `new_target`.
     pub on_reconnect: Rc<dyn Fn(String, String, String)>,
+    /// Delete sobre la tarjeta seleccionada: el integrador confirma (si hay
+    /// configuración extra) y borra el paso del documento.
+    pub on_delete_step: Rc<dyn Fn(String)>,
     /// Fin del drag de un nodo: persiste SOLO ese nodo (`store.set_layout`).
     pub on_move: Rc<dyn Fn(String, f64, f64)>,
     /// A completed click on empty canvas, transformed to world coordinates.
@@ -96,8 +108,8 @@ impl CanvasCallbacks {
 
 // --- Estado ----------------------------------------------------------------
 
-/// Resolución del press: efectos de clic ya aplicados + interacción pendiente
-/// para el drag (si llega).
+/// Resolución del press (al comienzo del drag): efectos de clic ya
+/// aplicados + la interacción que el drag llevará.
 enum Press {
     /// Checkbox → solo toggle, sin drag.
     Toggle,
@@ -180,7 +192,6 @@ struct CanvasState {
     data: RefCell<CanvasData>,
     transform: Cell<ViewTransform>,
     interaction: RefCell<Interaction>,
-    press: Cell<Option<Press>>,
     brush_active: Cell<bool>,
     paint_origin: Cell<Option<(f64, f64)>>,
     /// Arista de dependencia seleccionada `(source, target)`.
@@ -208,7 +219,6 @@ impl CanvasState {
             data: RefCell::new(CanvasData::default()),
             transform: Cell::new(ViewTransform::default()),
             interaction: RefCell::new(Interaction::None),
-            press: Cell::new(None),
             brush_active: Cell::new(false),
             paint_origin: Cell::new(None),
             selected_edge: RefCell::new(None),
@@ -246,10 +256,10 @@ impl CanvasState {
     // --- Press (efectos de clic) ------------------------------------------
 
     /// Resuelve el press en `screen`: aplica los efectos de clic (selección,
-    /// toggle, selección de arista) y deja la interacción pendiente para el
-    /// drag. NO muta el grafo estructural (eso lo hace `main.rs` vía
+    /// toggle, selección de arista) y devuelve la interacción que el drag
+    /// llevará. NO muta el grafo estructural (eso lo hace `main.rs` vía
     /// callbacks).
-    fn press(&self, screen: (f64, f64)) {
+    fn press(&self, screen: (f64, f64)) -> Press {
         self.paint_origin.set(None);
         let transform = self.transform.get();
         let world = transform.to_world(screen);
@@ -261,8 +271,7 @@ impl CanvasState {
                 let id = model.nodes[index].id.clone();
                 drop(model);
                 (self.callbacks.on_toggle)(id);
-                self.press.set(Some(Press::Toggle));
-                return;
+                return Press::Toggle;
             }
         }
 
@@ -277,9 +286,8 @@ impl CanvasState {
                     let edge = edge.clone();
                     drop(model);
                     *self.selected_edge.borrow_mut() = Some((edge.source.clone(), edge.target.clone()));
-                    self.press.set(Some(Press::Reconnect(edge.source, edge.target, edge.from)));
                     self.queue();
-                    return;
+                    return Press::Reconnect(edge.source, edge.target, edge.from);
                 }
             }
             if let Some((index, side)) = model.hit_port(screen, &transform) {
@@ -287,8 +295,7 @@ impl CanvasState {
                 let source = node.id.clone();
                 let anchor = node.anchor(side);
                 drop(model);
-                self.press.set(Some(Press::Connect(source, anchor)));
-                return;
+                return Press::Connect(source, anchor);
             }
         }
 
@@ -301,8 +308,7 @@ impl CanvasState {
             drop(model);
             *self.selected_edge.borrow_mut() = None;
             (self.callbacks.on_select)(id.clone());
-            self.press.set(Some(Press::Node(id, offset)));
-            return;
+            return Press::Node(id, offset);
         }
 
         // 5) Arista de dependencia → seleccionar (Delete la borrará).
@@ -310,9 +316,8 @@ impl CanvasState {
             let edge = model.edges[index].clone();
             drop(model);
             *self.selected_edge.borrow_mut() = Some((edge.source, edge.target));
-            self.press.set(Some(Press::Edge));
             self.queue();
-            return;
+            return Press::Edge;
         }
 
         // 6) Vacío → pan + limpia la selección de arista.
@@ -320,45 +325,24 @@ impl CanvasState {
         *self.selected_edge.borrow_mut() = None;
         if self.brush_active.get() && self.callbacks.edits() {
             self.paint_origin.set(Some(screen));
-            self.press.set(Some(Press::Select));
-            return;
+            return Press::Select;
         }
-        self.press.set(Some(Press::Pan));
         self.queue();
-    }
-
-    fn release(&self, screen: (f64, f64)) {
-        let Some(origin) = self.paint_origin.take() else { return };
-        if !self.brush_active.get() || !self.callbacks.edits()
-            || (screen.0 - origin.0).hypot(screen.1 - origin.1) > 5.0 { return; }
-        let world = self.transform.get().to_world(screen);
-        let empty = self.model.borrow().node_at(world).is_none();
-        if empty {
-            (self.callbacks.on_place)(world.0, world.1);
-        }
+        Press::Pan
     }
 
     // --- Gestos de drag ----------------------------------------------------
 
+    /// GTK emite `drag-begin` en el propio botón pulsado (el `begin` del
+    /// gesto, sin umbral): aquí se resuelve EL press de ESTE gesto y se
+    /// arranca la interacción — nunca se comparte estado de press entre
+    /// gestos (era la raíz del «una interacción atrás»: paneo al mover una
+    /// tarjeta y teletransporte al panelear).
     fn drag_begin(&self, screen: (f64, f64)) {
-        let pending = self.press.take();
-        let start_pan = (self.transform.get().pan_x, self.transform.get().pan_y);
-        let mut interaction = match pending {
-            Some(press) => Interaction::from_press(press, screen, start_pan),
-            None => {
-                // Drag sin press resuelto (orden de señales): resolver aquí.
-                self.press(screen);
-                match self.press.take() {
-                    Some(press) => Interaction::from_press(press, screen, start_pan),
-                    None => Interaction::None,
-                }
-            }
-        };
-        if let Interaction::Node { start, .. } = &mut interaction {
-            // El press pudo calcular el offset con una pantalla previa:
-            // se re-ancla al inicio real del drag.
-            *start = screen;
-        }
+        let press = self.press(screen);
+        let transform = self.transform.get();
+        let interaction =
+            Interaction::from_press(press, screen, (transform.pan_x, transform.pan_y));
         *self.interaction.borrow_mut() = interaction;
     }
 
@@ -409,7 +393,22 @@ impl CanvasState {
         self.queue();
     }
 
-    fn drag_end(&self) {
+    /// `end_offset` es el desplazamiento final respecto al inicio del drag.
+    /// El click del pincel (colocar herramienta) vive aquí: era el
+    /// `release` del `GestureClick`, ahora un drag sin mover.
+    fn drag_end(&self, end_offset: (f64, f64)) {
+        if let Some(origin) = self.paint_origin.take() {
+            if self.brush_active.get()
+                && self.callbacks.edits()
+                && end_offset.0.hypot(end_offset.1) <= 5.0
+            {
+                let screen = (origin.0 + end_offset.0, origin.1 + end_offset.1);
+                let world = self.transform.get().to_world(screen);
+                if self.model.borrow().node_at(world).is_none() {
+                    (self.callbacks.on_place)(world.0, world.1);
+                }
+            }
+        }
         let interaction =
             std::mem::replace(&mut *self.interaction.borrow_mut(), Interaction::None);
         // P2-6: la posición FINAL del nodo arrastrado se captura ANTES de
@@ -492,16 +491,36 @@ impl CanvasState {
         self.queue();
     }
 
-    /// Delete/Backspace: borra la arista de dependencia seleccionada (A9).
-    fn delete_selected_edge(&self) {
-        if !self.callbacks.edits() {
-            return;
+    /// Delete/Backspace: borra la arista de dependencia seleccionada (A9) o
+    /// la tarjeta seleccionada (`on_delete_step`). Devuelve `true` si había
+    /// selección que consumir (la tecla no debe seguir viajando).
+    fn delete_selection(&self) -> bool {
+        if self.selected_edge.borrow().is_some() {
+            if self.callbacks.edits() {
+                let (source, target) = self
+                    .selected_edge
+                    .borrow_mut()
+                    .take()
+                    .expect("checked above");
+                (self.callbacks.on_disconnect)(source, target);
+                self.queue();
+            }
+            return true;
         }
-        let selected = self.selected_edge.borrow_mut().take();
-        if let Some((source, target)) = selected {
-            (self.callbacks.on_disconnect)(source, target);
-            self.queue();
+        let active = self
+            .model
+            .borrow()
+            .nodes
+            .iter()
+            .find(|node| node.active)
+            .map(|node| node.id.clone());
+        if let Some(id) = active {
+            if self.callbacks.edits() {
+                (self.callbacks.on_delete_step)(id);
+            }
+            return true;
         }
+        false
     }
 
     /// Zoom con ctrl+rueda anclado al cursor (o al centro).
@@ -621,7 +640,7 @@ impl CanvasState {
                 .unwrap_or_else(|| "Pipeline graph".into());
             root.update_property(&[gtk::accessible::Property::Label(&name)]);
             root.set_tooltip_text(Some(if self.callbacks.edits() {
-                "Drag cards to move · Drag ports to connect · Ctrl+scroll to zoom · Home to fit · Left/Right to select"
+                "Drag cards to move · Drag ports to connect · Ctrl+scroll to zoom · Home to fit · Left/Right to select · Delete removes the selected link or card"
             } else {
                 "Read-only pipeline · Drag background to pan · Ctrl+scroll to zoom · Home to fit · Left/Right to select · Space toggles run selection"
             }));
@@ -1017,7 +1036,7 @@ impl PipelineCanvas {
         area.set_size_request(240, 160);
         area.update_property(&[
             gtk::accessible::Property::Label("Pipeline graph"),
-            gtk::accessible::Property::Description("Left and Right select a step; Space toggles its run checkbox. Alt+arrows pan; plus and minus zoom. Drag cards to move, ports to connect. Delete removes the selected dependency."),
+            gtk::accessible::Property::Description("Left and Right select a step; Space toggles its run checkbox. Alt+arrows pan; plus and minus zoom. Drag cards to move, ports to connect. Delete removes the selected dependency or the selected card."),
         ]);
         area.set_tooltip_text(Some("Drag to pan · Ctrl+scroll to zoom · Left/Right to select · Space to toggle run selection"));
         area.add_css_class("opm-canvas");
@@ -1030,33 +1049,21 @@ impl PipelineCanvas {
         // Weak del widget para `queue_draw` sin ciclos (§11 A12).
         *state.root.borrow_mut() = Some(area.downgrade());
 
-        // Clic: efectos de selección/checkbox/arista.
-        area.add_controller({
-            let state = Rc::clone(&state);
-            let click = gtk::GestureClick::new();
-            click.connect_released({
-                let state = Rc::clone(&state);
-                move |gesture, _, x, y| {
-                    if gesture.current_button() == gdk::BUTTON_PRIMARY { state.release((x, y)); }
-                }
-            });
-            click.connect_pressed(move |gesture, _n_press, x, y| {
-                if gesture.current_button() != gdk::BUTTON_PRIMARY {
-                    return;
-                }
-                if let Some(widget) = gesture.widget() { widget.grab_focus(); }
-                state.press((x, y));
-            });
-            click
-        });
-
-        // Drag: pan / mover nodo / conectar / reconectar.
+        // Drag: press (selección/checkbox/arista) / pan / mover nodo /
+        // conectar / reconectar. UN solo gesto: `drag-begin` llega en el
+        // propio botón pulsado (ver `drag_begin`), antes que cualquier
+        // `GestureClick` por el orden de reparto de controladores.
         area.add_controller({
             let drag = gtk::GestureDrag::new();
             drag.set_button(gdk::BUTTON_PRIMARY);
             drag.connect_drag_begin({
                 let state = Rc::clone(&state);
-                move |_, x, y| state.drag_begin((x, y))
+                move |gesture, x, y| {
+                    if let Some(widget) = gesture.widget() {
+                        widget.grab_focus();
+                    }
+                    state.drag_begin((x, y))
+                }
             });
             drag.connect_drag_update({
                 let state = Rc::clone(&state);
@@ -1064,7 +1071,7 @@ impl PipelineCanvas {
             });
             drag.connect_drag_end({
                 let state = Rc::clone(&state);
-                move |_, _offset_x, _offset_y| state.drag_end()
+                move |_, offset_x, offset_y| state.drag_end((offset_x, offset_y))
             });
             drag
         });
@@ -1111,9 +1118,7 @@ impl PipelineCanvas {
                     return glib::Propagation::Stop;
                 }
                 if matches!(key, gdk::Key::Delete | gdk::Key::BackSpace) {
-                    let had_selection = state.selected_edge.borrow().is_some();
-                    state.delete_selected_edge();
-                    if had_selection {
+                    if state.delete_selection() {
                         return glib::Propagation::Stop;
                     }
                 }
@@ -1157,7 +1162,7 @@ impl PipelineCanvas {
         help.set_tooltip_text(Some("Canvas controls and link types"));
         help.update_property(&[gtk::accessible::Property::Label("Canvas controls and link types")]);
         let popover = gtk::Popover::new();
-        let text = gtk::Label::new(Some("Drag background to pan\nCtrl+scroll or + / − to zoom\nHome to fit the pipeline\nLeft / Right to select a step\nSpace to toggle its run checkbox\n\nLinks\nGray thin / chevron: step order\nTeal / open arrow: output flow\nPurple / filled arrow: dependency\n\nDrag cards to move them in Design or Work. Work saves positions in its own folder. In Design, drag any of the four ports to connect steps. Links use top/bottom ports for vertical layouts and side ports for horizontal layouts. Select a dependency and press Delete to remove it, or drag its destination port to reconnect it. Escape returns from the tool brush to selection."));
+        let text = gtk::Label::new(Some("Drag background to pan\nCtrl+scroll or + / − to zoom\nHome to fit the pipeline\nLeft / Right to select a step\nSpace to toggle its run checkbox\n\nLinks\nGray thin / chevron: step order\nTeal / open arrow: output flow\nPurple / filled arrow: dependency\n\nDrag cards to move them in Design or Work. Work saves positions in its own folder. In Design, drag any of the four ports to another card or its ports to add a dependency arrow. Links use top/bottom ports for vertical layouts and side ports for horizontal layouts. Select a dependency and press Delete to remove it, or drag its destination port to reconnect it. Select a card and press Delete to remove the step; the app asks for confirmation first if it has configured inputs, outputs, parameters or links. Escape returns from the tool brush to selection."));
         text.set_wrap(true);
         text.set_max_width_chars(38);
         text.set_xalign(0.0);
@@ -1212,24 +1217,24 @@ mod tests {
         let state = CanvasState::new(CanvasCallbacks {
             on_select: Rc::new(|_| {}), on_toggle: Rc::new(|_| {}),
             on_connect: Rc::new(|_, _| {}), on_disconnect: Rc::new(|_, _| {}),
-            on_reconnect: Rc::new(|_, _, _| {}), on_move: Rc::new(|_, _, _| {}),
+            on_reconnect: Rc::new(|_, _, _| {}), on_delete_step: Rc::new(|_| {}),
+            on_move: Rc::new(|_, _, _| {}),
             on_place: { let placed = placed.clone(); Rc::new(move |x, y| placed.borrow_mut().push((x, y))) },
             on_cancel_brush: Rc::new(|| {}),
             edits_enabled: { let edits = edits.clone(); Rc::new(move || edits.get()) },
         }, Palette::LIGHT);
         state.brush_active.set(true);
         state.transform.set(ViewTransform { zoom: 2.0, pan_x: 20.0, pan_y: -10.0 });
-        state.press((100.0, 50.0));
         state.drag_begin((100.0, 50.0));
-        state.release((100.0, 50.0));
-        state.release((100.0, 50.0));
+        state.drag_end((0.0, 0.0));
+        state.drag_end((0.0, 0.0));
         assert_eq!(*placed.borrow(), vec![(40.0, 30.0)]);
-        state.press((100.0, 50.0)); state.release((150.0, 50.0));
+        state.drag_begin((100.0, 50.0)); state.drag_end((50.0, 0.0));
         assert_eq!(placed.borrow().len(), 1);
-        state.press((100.0, 50.0)); edits.set(false); state.release((100.0, 50.0));
+        edits.set(false); state.drag_begin((100.0, 50.0)); state.drag_end((0.0, 0.0));
         assert_eq!(placed.borrow().len(), 1);
         edits.set(true); state.brush_active.set(false);
-        state.press((100.0, 50.0)); state.release((100.0, 50.0));
+        state.drag_begin((100.0, 50.0)); state.drag_end((0.0, 0.0));
         assert_eq!(placed.borrow().len(), 1);
     }
 
@@ -1275,6 +1280,7 @@ mod tests {
                 on_connect: Rc::new(|_: String, _: String| {}),
                 on_disconnect: Rc::new(|_: String, _: String| {}),
                 on_reconnect: Rc::new(|_: String, _: String, _: String| {}),
+                on_delete_step: Rc::new(|_: String| {}),
                 on_move: Rc::new(move |id, x, y| {
                     recorded.borrow_mut().push((id, x, y))
                 }),
@@ -1332,7 +1338,7 @@ mod tests {
         state.transform.set(transform);
         state.drag_begin(transform.to_screen((180.0, 175.0)));
         state.drag_update((50.0, 25.0));
-        state.drag_end();
+        state.drag_end((50.0, 25.0));
         assert_eq!(*moves.borrow(), vec![("s1".into(), 180.0, 170.0)]);
     }
 
@@ -1362,15 +1368,15 @@ mod tests {
         state.update(data);
         state.drag_begin((340.0, 168.0));
         state.drag_update((160.0, 0.0));
-        state.drag_end();
+        state.drag_end((160.0, 0.0));
         assert_eq!(*connections.borrow(), vec![("source".to_owned(), "target".to_owned())]);
         *state.selected_edge.borrow_mut() = Some(("source".into(), "target".into()));
         editable.set(false);
-        state.delete_selected_edge();
+        assert!(state.delete_selection());
         assert!(removals.borrow().is_empty());
         assert!(state.selected_edge.borrow().is_some());
         editable.set(true);
-        state.delete_selected_edge();
+        assert!(state.delete_selection());
         assert_eq!(*removals.borrow(), *connections.borrow());
         assert!(moves.borrow().is_empty());
     }
@@ -1398,7 +1404,7 @@ mod tests {
             state.drag_begin(from);
             assert!(matches!(*state.interaction.borrow(), Interaction::Connect { anchor: actual, .. } if actual == anchor));
             state.drag_update((to.0 - from.0, to.1 - from.1));
-            state.drag_end();
+            state.drag_end((to.0 - from.0, to.1 - from.1));
         }
         assert_eq!(*connections.borrow(), vec![("source".to_owned(), "target".to_owned()); 4]);
         assert!(moves.borrow().is_empty());
@@ -1425,9 +1431,48 @@ mod tests {
         state.drag_begin((210.0, 300.0));
         assert!(matches!(*state.interaction.borrow(), Interaction::Reconnect { anchor: (210.0, 216.0), .. }));
         state.drag_update((0.0, 175.0));
-        state.drag_end();
+        state.drag_end((0.0, 175.0));
         assert_eq!(*reconnected.borrow(), vec![("source".to_owned(), "target".to_owned(), "other".to_owned())]);
         assert!(moves.borrow().is_empty());
+    }
+
+    /// Regresión del press compartido entre gestos: cada `drag-begin`
+    /// resuelve SU press con SUS coordenadas. Un click en el vacío seguido
+    /// de un drag sobre una tarjeta mueve LA TARJETA (no panea el lienzo), y
+    /// un click sobre una tarjeta seguido de un drag en el vacío panea sin
+    /// mover nada (la tarjeta recién pulsada NO se teletransporta).
+    #[test]
+    fn cada_gesture_resuelve_su_press_sin_estado_residual() {
+        let moves = Rc::new(RefCell::new(Vec::new()));
+        let state = state_recording_moves(&moves);
+        let mut data = data_with("a", (80.0, 120.0));
+        let b = data_with("b", (80.0, 320.0));
+        data.steps.extend(b.steps);
+        data.layout.extend(b.layout);
+        state.update(data);
+        let transform = state.transform.get();
+
+        // Gesto 1: click en el vacío (drag sin mover). Gesto 2: drag de «b».
+        state.drag_begin((500.0, 400.0));
+        state.drag_end((0.0, 0.0));
+        state.drag_begin((180.0, 375.0));
+        state.drag_update((30.0, 0.0));
+        state.drag_end((30.0, 0.0));
+        assert_eq!(*moves.borrow(), vec![("b".to_owned(), 110.0, 320.0)]);
+        assert_eq!(state.transform.get().pan_x, transform.pan_x);
+
+        // Gesto 3: click sobre «a». Gesto 4: drag en el vacío → pan.
+        state.drag_begin((180.0, 175.0));
+        state.drag_end((0.0, 0.0));
+        moves.borrow_mut().clear();
+        state.drag_begin((500.0, 400.0));
+        state.drag_update((25.0, 10.0));
+        state.drag_end((25.0, 10.0));
+        assert!(moves.borrow().is_empty(), "paneando el vacío no se mueve ninguna tarjeta");
+        assert_eq!(state.transform.get().pan_x, transform.pan_x + 25.0);
+        assert_eq!(state.transform.get().pan_y, transform.pan_y + 10.0);
+        assert_eq!(state.model.borrow().nodes[0].position, (80.0, 120.0));
+        assert_eq!(state.model.borrow().nodes[1].position, (110.0, 320.0));
     }
 
     /// P2-6: `drag_end` captura la posición FINAL del nodo arrastrado ANTES
@@ -1455,7 +1500,7 @@ mod tests {
         state.update(stale);
         assert!(state.deferred.borrow().is_some());
 
-        state.drag_end();
+        state.drag_end((0.0, 0.0));
 
         assert_eq!(state.model.borrow().nodes[0].position, (400.0, 300.0));
         assert_eq!(
@@ -1540,6 +1585,7 @@ mod tests {
                 on_connect: no_op2.clone(),
                 on_disconnect: no_op2,
                 on_reconnect: no_op3,
+                on_delete_step: Rc::new(|_: String| {}),
                 on_move: no_op4,
                 on_place: Rc::new(|_, _| {}),
                 on_cancel_brush: Rc::new(|| {}),

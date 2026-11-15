@@ -1006,6 +1006,69 @@ impl AppCmds {
         self.refresh_domain();
     }
 
+    /// Delete de un paso desde el lienzo (solo Diseño, A12). Con
+    /// configuración extra (inputs/outputs/params/dependencias o pasos que
+    /// dependen de él) pide confirmación explícita (§3.7: nada destructivo
+    /// es silencioso); un paso sin más configuración se borra directo.
+    fn delete_step(self: &Rc<Self>, step_id: String) {
+        let Some(design) = self.design() else {
+            return;
+        };
+        let Some(step) = design.borrow().step(&step_id) else {
+            return;
+        };
+        let dependents: Vec<String> = design
+            .borrow()
+            .steps()
+            .into_iter()
+            .filter(|other| other.id != step_id && other.dependencies.contains(&step_id))
+            .map(|other| other.id)
+            .collect();
+        let mut extra = Vec::new();
+        if !step.inputs.is_empty() {
+            extra.push(format!("{} input(s)", step.inputs.len()));
+        }
+        if !step.outputs.is_empty() {
+            extra.push(format!("{} output(s)", step.outputs.len()));
+        }
+        if !step.parameters.is_empty() {
+            extra.push(format!("{} parameter(s)", step.parameters.len()));
+        }
+        if !step.dependencies.is_empty() {
+            extra.push(format!("{} outgoing link(s)", step.dependencies.len()));
+        }
+        if !dependents.is_empty() {
+            extra.push(format!(
+                "{} incoming link(s) from {}",
+                dependents.len(),
+                dependents.join(", ")
+            ));
+        }
+        let me = Rc::clone(self);
+        let window = self.window.clone();
+        glib::spawn_future_local(async move {
+            if !extra.is_empty() {
+                let detail = format!(
+                    "Step \"{}\" has configured {}. Removing it deletes that \
+                     configuration and every link to it.\n\nDelete the step?",
+                    step.name,
+                    extra.join(", ")
+                );
+                if !dialogs::confirm_message(&window, "Delete step?", &detail, "Delete").await {
+                    return;
+                }
+            }
+            if let Some(design) = me.design() {
+                if let Err(err) = design.borrow_mut().remove_step(&step_id) {
+                    show_error(&window, &err.to_string());
+                    return;
+                }
+            }
+            me.select_step(None);
+            me.refresh_domain();
+        });
+    }
+
     /// Arranque de ejecución (§6, A10): `Ok` → UI «en curso» + logs limpios
     /// (paridad SPA); `Blocked` → `message + "step.field: msg; …"` con el
     /// preflight del motor como autoridad.
@@ -2906,6 +2969,16 @@ fn build_window(app: &Application, scope: WindowScope, open_paths: &[PathBuf]) -
                         // `new_target`.
                         me.remove_dependency(&target, &source);
                         me.add_dependency(&new_target, &source);
+                    }
+                })
+            },
+            on_delete_step: {
+                let slot = slot.clone();
+                Rc::new(move |step_id| {
+                    if let Some(me) = slot.borrow().as_ref().and_then(Weak::upgrade) {
+                        // Confirmación (si hay config extra) y borrado en
+                        // `delete_step`.
+                        me.delete_step(step_id);
                     }
                 })
             },
