@@ -6,6 +6,10 @@ The format follows Keep a Changelog-style sections, and the project uses semanti
 
 ## Unreleased
 
+### Added
+
+- Theme picker under View → Theme: a submenu with Light, Dark and Follow system radio options. The choice is saved between sessions, applies to every open window at once and follows desktop theme changes while on Follow system.
+
 ## 0.3.2 - 2026-11-14
 
 ### Fixed

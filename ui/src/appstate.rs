@@ -12,7 +12,9 @@
 //! - el hueco de sesión `last_work` (`last_work` + `last_work_at`,
 //!   timestamp unix): `crate::project::restore` lee este hueco y aplica la
 //!   semántica de sesión con TTL de 1 h (paridad con el SPA) sobre la última
-//!   carpeta de trabajo abierta.
+//!   carpeta de trabajo abierta;
+//! - el modo de tema de la interfaz (`theme_mode`, valores de
+//!   [`ThemeMode::id`]): la elección Light/Dark/Follow system del menú View.
 //!
 //! Formato `clave=valor` (una por línea) leído de forma tolerante: claves
 //! desconocidas y valores ilegibles se ignoran y dejan el default. Toda
@@ -23,6 +25,7 @@
 //! el formato de una línea por clave; se prefiere no restaurar).
 
 use crate::explorer::ExplorerState;
+use crate::theme::ThemeMode;
 use opm_fs::write_atomic;
 use std::path::{Path, PathBuf};
 
@@ -31,6 +34,9 @@ use std::path::{Path, PathBuf};
 struct UiState {
     explorer: ExplorerState,
     last_work: Option<(String, i64)>,
+    /// Modo de tema de la interfaz (`theme_mode`); sin clave, el default
+    /// [`ThemeMode::System`].
+    theme_mode: Option<ThemeMode>,
 }
 
 /// Ruta de `ui.ini` en el directorio de configuración por SO.
@@ -55,6 +61,7 @@ fn parse_state(text: &str) -> UiState {
     let explorer = crate::explorer::parse_explorer_text(text);
     let mut path: Option<String> = None;
     let mut at: Option<i64> = None;
+    let mut mode: Option<ThemeMode> = None;
     for line in text.lines() {
         let Some((key, value)) = line.split_once('=') else {
             continue;
@@ -67,6 +74,7 @@ fn parse_state(text: &str) -> UiState {
                 }
             }
             "last_work_at" => at = value.trim().parse::<i64>().ok(),
+            "theme_mode" => mode = ThemeMode::from_id(value.trim()),
             _ => {}
         }
     }
@@ -75,17 +83,21 @@ fn parse_state(text: &str) -> UiState {
         // El hueco solo vale con ruta Y timestamp (una clave huérfana no
         // restaura nada).
         last_work: path.zip(at),
+        theme_mode: mode,
     }
 }
 
 /// Serializa el estado entero: primero las claves del explorador (su
-/// formato propio), después el hueco de sesión.
+/// formato propio), después el hueco de sesión y el modo de tema.
 fn compose_state(state: &UiState) -> String {
     let mut text = crate::explorer::serialize_explorer_text(&state.explorer);
     if let Some((path, at)) = &state.last_work {
         if !path.contains('\n') && !path.contains('\r') {
             text.push_str(&format!("last_work={path}\nlast_work_at={at}\n"));
         }
+    }
+    if let Some(mode) = &state.theme_mode {
+        text.push_str(&format!("theme_mode={}\n", mode.id()));
     }
     text
 }
@@ -150,6 +162,29 @@ pub fn save_last_work_to(path: &Path, slot: &Option<(String, i64)>) -> std::io::
     write_state(path, &ui)
 }
 
+/// Modo de tema de la interfaz guardado; `None` sin clave legible (entonces
+/// [`ThemeMode::System`]).
+pub fn load_theme_mode() -> Option<ThemeMode> {
+    load_theme_mode_from(&state_file())
+}
+
+/// [`load_theme_mode`] sobre una ruta explícita (tests).
+pub fn load_theme_mode_from(path: &Path) -> Option<ThemeMode> {
+    read_state(path).theme_mode
+}
+
+/// Guarda el modo de tema conservando el resto de claves.
+pub fn save_theme_mode(mode: ThemeMode) -> std::io::Result<()> {
+    save_theme_mode_to(&state_file(), mode)
+}
+
+/// [`save_theme_mode`] sobre una ruta explícita (tests).
+pub fn save_theme_mode_to(path: &Path, mode: ThemeMode) -> std::io::Result<()> {
+    let mut ui = read_state(path);
+    ui.theme_mode = Some(mode);
+    write_state(path, &ui)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -170,6 +205,30 @@ mod tests {
         let path = temp_file("ausente");
         assert_eq!(load_explorer_from(&path), ExplorerState::default());
         assert_eq!(load_last_work_from(&path), None);
+        assert_eq!(load_theme_mode_from(&path), None);
+    }
+
+    #[test]
+    fn roundtrip_tema_sin_tocar_explorador_ni_sesion() {
+        let path = temp_file("tema");
+        let explorer = ExplorerState {
+            visible: false,
+            width: 321,
+        };
+        save_explorer_to(&path, &explorer).unwrap();
+        let slot = Some(("/datos/proyecto".to_owned(), 42_i64));
+        save_last_work_to(&path, &slot).unwrap();
+
+        save_theme_mode_to(&path, ThemeMode::Dark).unwrap();
+        assert_eq!(load_theme_mode_from(&path), Some(ThemeMode::Dark));
+        // Reescritura de reemplazo completo: el resto de claves sobrevive.
+        assert_eq!(load_explorer_from(&path), explorer);
+        assert_eq!(load_last_work_from(&path), slot);
+
+        // Modo ilegible → sin clave restaurable (default System aguas arriba).
+        std::fs::write(&path, "theme_mode=sepia\n").unwrap();
+        assert_eq!(load_theme_mode_from(&path), None);
+        std::fs::remove_file(&path).unwrap();
     }
 
     #[test]

@@ -30,6 +30,11 @@ reported on the start page. Supplying a file or folder on the command line
 opens it directly. **Ctrl+W** closes the start window; **Ctrl+S** has nothing to
 save there.
 
+Use **View → Theme → Light / Dark / Follow system** to choose the interface
+theme from the Theme submenu. The choice is saved between sessions and applies
+to every open window; **Follow system** tracks the desktop theme and updates
+live when it changes.
+
 ## 3. Pipelines, Library, and Work Folders
 
 The application separates *designing* a pipeline from *running* it.

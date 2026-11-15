@@ -273,6 +273,34 @@ impl AppCmds {
         }
     }
 
+    /// Repinta esta ventana con la paleta vigente (§23): CSS global, tags
+    /// del editor y las vistas Cairo (lienzo, logs).
+    fn apply_theme(&self) {
+        let palette = theme::palette();
+        install_theme_css(&palette);
+        self.editor_pane.set_palette(&palette);
+        if let Some(canvas) = &self.canvas {
+            canvas.set_palette(palette);
+        }
+        if let Some(logs) = &self.logs {
+            logs.set_palette(&palette);
+        }
+    }
+
+    /// Sincroniza el radio `win.theme` de esta ventana con el modo global.
+    fn set_theme_state(&self, mode: theme::ThemeMode) {
+        let action = self
+            .action_group
+            .borrow()
+            .as_ref()
+            .and_then(|weak| weak.upgrade())
+            .and_then(|group| group.lookup_action("theme"))
+            .and_then(|action| action.downcast::<gio::SimpleAction>().ok());
+        if let Some(action) = action {
+            action.set_state(&mode.id().to_variant());
+        }
+    }
+
     // --- Búsqueda del archivo actual (§40.1) -------------------------------
 
     /// Pinta el marcado de búsqueda y la barra desde [`find::FindState`]
@@ -1837,6 +1865,20 @@ impl Commands for AppCmds {
         self.refresh();
     }
 
+    fn set_theme(&self, mode: theme::ThemeMode) {
+        // El tema es global: fija el modo, se persiste (§11 A13) y cada
+        // ventana viva repinta su superficie y sincroniza su radio (el CSS
+        // compartido ya es único por display).
+        theme::set_mode(mode);
+        if let Err(err) = appstate::save_theme_mode(mode) {
+            eprintln!("opm: no se pudo guardar el tema de la interfaz: {err}");
+        }
+        for me in theme_listeners() {
+            me.apply_theme();
+            me.set_theme_state(mode);
+        }
+    }
+
     fn toggle_logs(&self) {
         let (Some(pane), Some(logs)) = (&self.logs_paned, &self.logs) else { return; };
         if pane.end_child().is_none() {
@@ -2418,6 +2460,28 @@ fn theme_css(palette: &theme::Palette) -> String {
 // One display provider; later windows and theme changes update it in place.
 thread_local! {
     static WORKSPACE_THEME: RefCell<Option<CssProvider>> = const { RefCell::new(None) };
+}
+
+thread_local! {
+    /// Ventanas vivas que repintan al cambiar el tema (global) o el tema del
+    /// escritorio. `Weak` (§11 A12): cerrar la ventana no retiene nada.
+    static THEME_LISTENERS: RefCell<Vec<Weak<AppCmds>>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Registra `me` como oyente de cambios de tema, podando las ya cerradas.
+fn register_theme_listener(me: &Rc<AppCmds>) {
+    THEME_LISTENERS.with_borrow_mut(|listeners| {
+        listeners.retain(|weak| weak.upgrade().is_some());
+        listeners.push(Rc::downgrade(me));
+    });
+}
+
+/// Oyentes de tema vivos (y poda de las ventanas cerradas).
+fn theme_listeners() -> Vec<Rc<AppCmds>> {
+    THEME_LISTENERS.with_borrow_mut(|listeners| {
+        listeners.retain(|weak| weak.upgrade().is_some());
+        listeners.iter().filter_map(Weak::upgrade).collect()
+    })
 }
 
 fn install_theme_css(palette: &theme::Palette) {
@@ -3361,6 +3425,8 @@ fn build_window(app: &Application, scope: WindowScope, open_paths: &[PathBuf]) -
     // El grupo devuelve un `Rc` DÉBIL en `AppCmds`; la referencia fuerte la
     // retiene la ventana (§11 A12) hasta [`disconnect_window_actions`].
     *cmds.action_group.borrow_mut() = Some(install_actions(&window, app, cmds.clone()).downgrade());
+    // Los cambios de tema (menú View o escritorio) repintan esta ventana.
+    register_theme_listener(&cmds);
 
     // Event pump (§11 A12): 250 ms, `next_event(ZERO)` con lote acotado y
     // anexos de log agrupados; los refresh son de dominio, NUNCA del editor.
@@ -3414,11 +3480,7 @@ fn build_window(app: &Application, scope: WindowScope, open_paths: &[PathBuf]) -
                 let weak = Rc::downgrade(&cmds);
                 settings.connect_notify_local(Some(property), move |_, _| {
                     let Some(me) = weak.upgrade() else { return; };
-                    let palette = theme::palette();
-                    install_theme_css(&palette);
-                    me.editor_pane.set_palette(&palette);
-                    if let Some(canvas) = &me.canvas { canvas.set_palette(palette); }
-                    if let Some(logs) = &me.logs { logs.set_palette(&palette); }
+                    me.apply_theme();
                 })
             }).collect();
         let handlers = RefCell::new(handlers);
@@ -3466,6 +3528,9 @@ fn main() {
     }
     let app = Application::builder().application_id("app.opm").build();
     app.connect_activate(move |app| {
+        // Tema persistido (§11 A13) antes de la primera ventana: sus radios
+        // y su paleta inicial parten del modo elegido.
+        theme::set_mode(appstate::load_theme_mode().unwrap_or_default());
         if !files.is_empty() {
             build_window(app, WindowScope::Standalone, &files);
         }

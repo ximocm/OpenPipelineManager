@@ -14,6 +14,7 @@
 use std::rc::Rc;
 
 use crate::tabs::WindowScope;
+use crate::theme::{self, ThemeMode};
 use gtk4 as gtk;
 use gtk4::gio;
 use gtk4::prelude::*;
@@ -44,6 +45,9 @@ pub enum Command {
     ShowHiddenFiles,
     RefreshFiles,
     ToggleLogs,
+    /// Selector de tema de la interfaz (View ▸ Light/Dark/Follow system):
+    /// acción con estado cuyo objetivo es el [`ThemeMode`] elegido.
+    Theme,
     /// Diseño: crea un documento de pipeline en memoria y abre su ventana.
     NewPipeline,
     /// Browse and install reusable tool and pipeline definitions.
@@ -96,6 +100,7 @@ impl Command {
             Command::ShowHiddenFiles => "win.show-hidden-files",
             Command::RefreshFiles => "win.refresh-files",
             Command::ToggleLogs => "win.toggle-logs",
+            Command::Theme => "win.theme",
             Command::NewPipeline => "win.new-pipeline",
             Command::Marketplace => "win.marketplace",
             Command::OpenPipeline => "win.open-pipeline",
@@ -135,6 +140,7 @@ impl Command {
             Command::ShowHiddenFiles => "Show Hidden Files",
             Command::RefreshFiles => "Refresh Files",
             Command::ToggleLogs => "Toggle Logs / Console",
+            Command::Theme => "Theme",
             Command::NewPipeline => "New pipeline",
             Command::Marketplace => "Marketplace…",
             Command::OpenPipeline => "Open pipeline",
@@ -178,6 +184,9 @@ pub trait Commands {
     fn show_hidden_files(&self, visible: bool);
     fn refresh_files(&self);
     fn toggle_logs(&self);
+    /// Cambia el tema de la interfaz (View ▸ Light/Dark/Follow system):
+    /// global, se persiste y repinta todas las ventanas vivas.
+    fn set_theme(&self, mode: ThemeMode);
     /// Diseño: documento nuevo (nombre + ventana de diseño, sin carpeta).
     fn new_pipeline(&self);
     /// Diseño: abre un documento de la librería (browser de la librería).
@@ -245,6 +254,7 @@ pub const ALL_COMMANDS: &[Command] = &[
     Command::ShowHiddenFiles,
     Command::RefreshFiles,
     Command::ToggleLogs,
+    Command::Theme,
     Command::Marketplace,
     Command::NewPipeline,
     Command::OpenPipeline,
@@ -262,10 +272,18 @@ pub const ALL_COMMANDS: &[Command] = &[
     Command::Shortcuts,
 ];
 
-/// Ítem puro del modelo de menú §36: `(etiqueta, action_id)`.
-type EntrySpec = (&'static str, &'static str);
+/// Ítem puro del modelo de menú §36: un comando o un submenú anidado
+/// (View ▸ Theme).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ItemSpec {
+    /// Comando `(etiqueta, action_id detallado)`.
+    Entry(&'static str, &'static str),
+    /// Submenú anidado `(título, secciones)`.
+    Submenu(&'static str, &'static [SectionSpec]),
+}
+use ItemSpec::{Entry, Submenu};
 /// Sección pura del modelo de menú §36: ítems contiguos con separador.
-type SectionSpec = &'static [EntrySpec];
+type SectionSpec = &'static [ItemSpec];
 /// Submenú puro §36: `(título, secciones)`.
 type SubmenuSpec = (&'static str, &'static [SectionSpec]);
 
@@ -275,91 +293,137 @@ const MENUBAR_SPEC: &[SubmenuSpec] = &[
     (
         "File",
         &[&[
-            ("New", "win.new"),
-            ("Open", "win.open"),
-            ("Open Folder", "win.open-folder"),
-            ("Save", "win.save"),
-            ("Save As", "win.save-as"),
-            ("Close Tab", "win.close-tab"),
+            Entry("New", "win.new"),
+            Entry("Open", "win.open"),
+            Entry("Open Folder", "win.open-folder"),
+            Entry("Save", "win.save"),
+            Entry("Save As", "win.save-as"),
+            Entry("Close Tab", "win.close-tab"),
         ]],
     ),
     (
         "Project",
         &[
             &[
-                ("New pipeline", "win.new-pipeline"),
-                ("Open pipeline", "win.open-pipeline"),
-                ("Import pipeline", "win.import-pipeline"),
-                ("Export pipeline", "win.export-pipeline"),
+                Entry("New pipeline", "win.new-pipeline"),
+                Entry("Open pipeline", "win.open-pipeline"),
+                Entry("Import pipeline", "win.import-pipeline"),
+                Entry("Export pipeline", "win.export-pipeline"),
             ],
             &[
-                ("Save pipeline", "win.save-pipeline"),
-                ("Save as pipeline", "win.save-as-pipeline"),
+                Entry("Save pipeline", "win.save-pipeline"),
+                Entry("Save as pipeline", "win.save-as-pipeline"),
             ],
             &[
-                ("New work", "win.new-work"),
-                ("Open work", "win.open-work"),
-                ("Update from library", "win.update-from-library"),
+                Entry("New work", "win.new-work"),
+                Entry("Open work", "win.open-work"),
+                Entry("Update from library", "win.update-from-library"),
             ],
         ],
     ),
     (
         "Edit",
         &[&[
-            ("Undo", "win.undo"),
-            ("Redo", "win.redo"),
-            ("Find", "win.find"),
-            ("Replace", "win.replace"),
+            Entry("Undo", "win.undo"),
+            Entry("Redo", "win.redo"),
+            Entry("Find", "win.find"),
+            Entry("Replace", "win.replace"),
         ]],
     ),
     (
         "Pipeline",
         &[&[
-            ("Marketplace…", "win.marketplace"),
-            ("Create step", "win.create-step"),
-            ("Run selected", "win.run-selected"),
-            ("Stop", "win.stop"),
+            Entry("Marketplace…", "win.marketplace"),
+            Entry("Create step", "win.create-step"),
+            Entry("Run selected", "win.run-selected"),
+            Entry("Stop", "win.stop"),
         ]],
     ),
     (
         "View",
-        &[&[
-            ("Markdown/Visual", "win.toggle-mode"),
-            ("Toggle Explorer", "win.toggle-explorer"),
-            ("Toggle Inspector", "win.toggle-inspector"),
-            ("Show All Files", "win.show-all-files"),
-            ("Show Hidden Files", "win.show-hidden-files"),
-            ("Refresh Files", "win.refresh-files"),
-            ("Toggle Logs / Console", "win.toggle-logs"),
-        ]],
+        &[
+            &[
+                Entry("Markdown/Visual", "win.toggle-mode"),
+                Entry("Toggle Explorer", "win.toggle-explorer"),
+                Entry("Toggle Inspector", "win.toggle-inspector"),
+                Entry("Show All Files", "win.show-all-files"),
+                Entry("Show Hidden Files", "win.show-hidden-files"),
+                Entry("Refresh Files", "win.refresh-files"),
+                Entry("Toggle Logs / Console", "win.toggle-logs"),
+            ],
+            &[Submenu(
+                "Theme",
+                &[&[
+                    Entry("Light", "win.theme::light"),
+                    Entry("Dark", "win.theme::dark"),
+                    Entry("Follow system", "win.theme::system"),
+                ]],
+            )],
+        ],
     ),
     (
         "Help",
-        &[&[("Atajos", "win.shortcuts"), ("About", "win.about")]],
+        &[&[Entry("Atajos", "win.shortcuts"), Entry("About", "win.about")]],
     ),
 ];
+
+/// Materializa unas secciones §36 en un `gio::Menu` (recursivo: los ítems
+/// [`ItemSpec::Submenu`] anidan sus propias secciones).
+fn build_menu(sections: &[SectionSpec]) -> gio::Menu {
+    let menu = gio::Menu::new();
+    for entries in sections {
+        let section = gio::Menu::new();
+        for &item in *entries {
+            match item {
+                Entry(label, action_id) => {
+                    section.append_item(&gio::MenuItem::new(Some(label), Some(action_id)));
+                }
+                Submenu(title, sub_sections) => {
+                    section.append_submenu(Some(title), &build_menu(sub_sections));
+                }
+            }
+        }
+        menu.append_section(None::<&str>, &section);
+    }
+    menu
+}
 
 /// Modelo de menú §36: File, Project, Edit, Pipeline, View, Help.
 pub fn build_menubar() -> gio::Menu {
     let menubar = gio::Menu::new();
     for &(title, sections) in MENUBAR_SPEC {
-        let submenu = gio::Menu::new();
-        for entries in sections {
-            let section = gio::Menu::new();
-            for &(label, action_id) in *entries {
-                section.append_item(&gio::MenuItem::new(Some(label), Some(action_id)));
-            }
-            submenu.append_section(None::<&str>, &section);
-        }
-        menubar.append_submenu(Some(title), &submenu);
+        menubar.append_submenu(Some(title), &build_menu(sections));
     }
     menubar
 }
 
+/// Argumento de activación según el tipo de acción (§3.7): el flag de las
+/// acciones con estado `bool` o el modo elegido en el radio de tema.
+#[derive(Clone, Copy, Debug)]
+enum Arg {
+    Flag(bool),
+    Theme(ThemeMode),
+}
+
+impl Arg {
+    /// Flag de las acciones con estado `bool` (falso para el resto).
+    fn flag(self) -> bool {
+        matches!(self, Arg::Flag(true))
+    }
+
+    /// Modo elegido en el radio de tema (System para el resto).
+    fn theme(self) -> ThemeMode {
+        match self {
+            Arg::Theme(mode) => mode,
+            Arg::Flag(_) => ThemeMode::System,
+        }
+    }
+}
+
 /// Enruta un comando activado al receptor [`Commands`] (§3.7: toda acción de
-/// la UI es explícita y observable en el host).
-/// `checked` carries the requested state of the two file visibility actions.
-fn dispatch(cmd: Command, host: &dyn Commands, checked: bool) {
+/// la UI es explícita y observable en el host). `arg` lleva el estado de las
+/// acciones con parámetro (visibilidad de ficheros, tema).
+fn dispatch(cmd: Command, host: &dyn Commands, arg: Arg) {
     match cmd {
         Command::New => host.new(),
         Command::Open => host.open(),
@@ -374,10 +438,11 @@ fn dispatch(cmd: Command, host: &dyn Commands, checked: bool) {
         Command::ToggleMode => host.toggle_mode(),
         Command::ToggleExplorer => host.toggle_explorer(),
         Command::ToggleInspector => host.toggle_inspector(),
-        Command::ShowAllFiles => host.show_all_files(checked),
-        Command::ShowHiddenFiles => host.show_hidden_files(checked),
+        Command::ShowAllFiles => host.show_all_files(arg.flag()),
+        Command::ShowHiddenFiles => host.show_hidden_files(arg.flag()),
         Command::RefreshFiles => host.refresh_files(),
         Command::ToggleLogs => host.toggle_logs(),
+        Command::Theme => host.set_theme(arg.theme()),
         Command::NewPipeline => host.new_pipeline(),
         Command::Marketplace => host.marketplace(),
         Command::OpenPipeline => host.open_pipeline(),
@@ -492,13 +557,40 @@ pub fn action_group(host: &Rc<dyn Commands>) -> gio::SimpleActionGroup {
             });
             action.connect_change_state(move |action, state| {
                 let Some(checked) = state.and_then(|v| v.get::<bool>()) else { return; };
-                dispatch(cmd, &*host, checked);
+                dispatch(cmd, &*host, Arg::Flag(checked));
                 action.set_state(&checked.to_variant());
+            });
+            action
+        } else if matches!(cmd, Command::Theme) {
+            // Radio Light/Dark/Follow system: acción con estado `s`; cada ítem
+            // del menú lleva su objetivo `win.theme::<id>` y GTK lo marca
+            // activo cuando coincide con el estado.
+            let action = gio::SimpleAction::new_stateful(
+                name,
+                Some(gtk::glib::VariantTy::STRING),
+                &theme::mode().id().to_variant(),
+            );
+            action.connect_activate(|action, target| {
+                // Activar un radio con objetivo = pedir ese estado.
+                if let Some(target) = target {
+                    action.change_state(target);
+                }
+            });
+            action.connect_change_state(move |action, state| {
+                let Some(mode) = state
+                    .and_then(|v| v.get::<String>())
+                    .as_deref()
+                    .and_then(ThemeMode::from_id)
+                else {
+                    return;
+                };
+                dispatch(cmd, &*host, Arg::Theme(mode));
+                action.set_state(&mode.id().to_variant());
             });
             action
         } else {
             let action = gio::SimpleAction::new(name, None);
-            action.connect_activate(move |_, _| dispatch(cmd, &*host, false));
+            action.connect_activate(move |_, _| dispatch(cmd, &*host, Arg::Flag(false)));
             action
         };
         group.add_action(&action);
@@ -585,78 +677,145 @@ mod tests {
         assert_eq!(vistos.len(), ALL_COMMANDS.len());
     }
 
+    /// Todas las entradas (`etiqueta`, `action_id`) de unas secciones,
+    /// descendiendo en los submenús anidados.
+    fn todas_las_entradas(sections: &[SectionSpec]) -> Vec<(&'static str, &'static str)> {
+        let mut out = Vec::new();
+        for section in sections {
+            for &item in *section {
+                match item {
+                    Entry(label, action_id) => out.push((label, action_id)),
+                    Submenu(_, sub) => out.extend(todas_las_entradas(sub)),
+                }
+            }
+        }
+        out
+    }
+
     /// §36: estructura exacta del menú — File, Project (librería/trabajo),
     /// Edit, Pipeline, View y Help con los ítems de pipeline-storage.
     #[test]
     fn estructura_menu_36() {
-        let esperado: &[(&str, &[&[(&str, &str)]])] = &[
+        let esperado: &[(&str, &[&[ItemSpec]])] = &[
             (
                 "File",
                 &[&[
-                    ("New", "win.new"),
-                    ("Open", "win.open"),
-                    ("Open Folder", "win.open-folder"),
-                    ("Save", "win.save"),
-                    ("Save As", "win.save-as"),
-                    ("Close Tab", "win.close-tab"),
+                    Entry("New", "win.new"),
+                    Entry("Open", "win.open"),
+                    Entry("Open Folder", "win.open-folder"),
+                    Entry("Save", "win.save"),
+                    Entry("Save As", "win.save-as"),
+                    Entry("Close Tab", "win.close-tab"),
                 ]],
             ),
             (
                 "Project",
                 &[
                     &[
-                        ("New pipeline", "win.new-pipeline"),
-                        ("Open pipeline", "win.open-pipeline"),
-                        ("Import pipeline", "win.import-pipeline"),
-                        ("Export pipeline", "win.export-pipeline"),
+                        Entry("New pipeline", "win.new-pipeline"),
+                        Entry("Open pipeline", "win.open-pipeline"),
+                        Entry("Import pipeline", "win.import-pipeline"),
+                        Entry("Export pipeline", "win.export-pipeline"),
                     ],
                     &[
-                        ("Save pipeline", "win.save-pipeline"),
-                        ("Save as pipeline", "win.save-as-pipeline"),
+                        Entry("Save pipeline", "win.save-pipeline"),
+                        Entry("Save as pipeline", "win.save-as-pipeline"),
                     ],
                     &[
-                        ("New work", "win.new-work"),
-                        ("Open work", "win.open-work"),
-                        ("Update from library", "win.update-from-library"),
+                        Entry("New work", "win.new-work"),
+                        Entry("Open work", "win.open-work"),
+                        Entry("Update from library", "win.update-from-library"),
                     ],
                 ],
             ),
             (
                 "Edit",
                 &[&[
-                    ("Undo", "win.undo"),
-                    ("Redo", "win.redo"),
-                    ("Find", "win.find"),
-                    ("Replace", "win.replace"),
+                    Entry("Undo", "win.undo"),
+                    Entry("Redo", "win.redo"),
+                    Entry("Find", "win.find"),
+                    Entry("Replace", "win.replace"),
                 ]],
             ),
             (
                 "Pipeline",
                 &[&[
-                    ("Marketplace…", "win.marketplace"),
-                    ("Create step", "win.create-step"),
-                    ("Run selected", "win.run-selected"),
-                    ("Stop", "win.stop"),
+                    Entry("Marketplace…", "win.marketplace"),
+                    Entry("Create step", "win.create-step"),
+                    Entry("Run selected", "win.run-selected"),
+                    Entry("Stop", "win.stop"),
                 ]],
             ),
             (
                 "View",
-                &[&[
-                    ("Markdown/Visual", "win.toggle-mode"),
-                    ("Toggle Explorer", "win.toggle-explorer"),
-                    ("Toggle Inspector", "win.toggle-inspector"),
-                    ("Show All Files", "win.show-all-files"),
-                    ("Show Hidden Files", "win.show-hidden-files"),
-                    ("Refresh Files", "win.refresh-files"),
-                    ("Toggle Logs / Console", "win.toggle-logs"),
-                ]],
+                &[
+                    &[
+                        Entry("Markdown/Visual", "win.toggle-mode"),
+                        Entry("Toggle Explorer", "win.toggle-explorer"),
+                        Entry("Toggle Inspector", "win.toggle-inspector"),
+                        Entry("Show All Files", "win.show-all-files"),
+                        Entry("Show Hidden Files", "win.show-hidden-files"),
+                        Entry("Refresh Files", "win.refresh-files"),
+                        Entry("Toggle Logs / Console", "win.toggle-logs"),
+                    ],
+                    &[Submenu(
+                        "Theme",
+                        &[&[
+                            Entry("Light", "win.theme::light"),
+                            Entry("Dark", "win.theme::dark"),
+                            Entry("Follow system", "win.theme::system"),
+                        ]],
+                    )],
+                ],
             ),
             (
                 "Help",
-                &[&[("Atajos", "win.shortcuts"), ("About", "win.about")]],
+                &[&[Entry("Atajos", "win.shortcuts"), Entry("About", "win.about")]],
             ),
         ];
         assert_eq!(MENUBAR_SPEC, esperado);
+    }
+
+    /// Verifica la materialización GMenu de `sections` contra el modelo
+    /// (recursivo: los submenús anidados verifican sus propias secciones).
+    fn verifica_secciones(menu: &gio::MenuModel, sections: &[SectionSpec]) {
+        assert_eq!(menu.n_items(), sections.len() as i32);
+        for (j, entries) in sections.iter().enumerate() {
+            let j = j as i32;
+            let section = menu.item_link(j, "section").expect("sección");
+            assert_eq!(section.n_items(), entries.len() as i32);
+            for (k, &item) in entries.iter().enumerate() {
+                let k = k as i32;
+                match item {
+                    Entry(label, action_id) => {
+                        let etiqueta = section
+                            .item_attribute_value(k, "label", None)
+                            .expect("etiqueta del ítem");
+                        assert_eq!(etiqueta.str(), Some(label));
+                        // Los radios de tema son acciones detalladas
+                        // `win.theme::<id>`: GMenu parte acción y objetivo.
+                        let (base, target) = match action_id.split_once("::") {
+                            Some((base, target)) => (base, Some(target)),
+                            None => (action_id, None),
+                        };
+                        let accion = section
+                            .item_attribute_value(k, "action", None)
+                            .expect("acción del ítem");
+                        assert_eq!(accion.str(), Some(base));
+                        let objetivo = section.item_attribute_value(k, "target", None);
+                        assert_eq!(objetivo.as_ref().and_then(|v| v.str()), target);
+                    }
+                    Submenu(title, sub_sections) => {
+                        let etiqueta = section
+                            .item_attribute_value(k, "label", None)
+                            .expect("etiqueta del submenú");
+                        assert_eq!(etiqueta.str(), Some(title));
+                        let sub = section.item_link(k, "submenu").expect("submenú anidado");
+                        verifica_secciones(&sub, sub_sections);
+                    }
+                }
+            }
+        }
     }
 
     /// `build_menubar()` materializa [`MENUBAR_SPEC`] en `gio::Menu` con los
@@ -673,23 +832,7 @@ mod tests {
                 .expect("título del submenú");
             assert_eq!(titulo.str(), Some(title));
             let submenu = menubar.item_link(i, "submenu").expect("submenú");
-            assert_eq!(submenu.n_items(), sections.len() as i32);
-            for (j, entries) in sections.iter().enumerate() {
-                let j = j as i32;
-                let section = submenu.item_link(j, "section").expect("sección");
-                assert_eq!(section.n_items(), entries.len() as i32);
-                for (k, &(label, action_id)) in entries.iter().enumerate() {
-                    let k = k as i32;
-                    let etiqueta = section
-                        .item_attribute_value(k, "label", None)
-                        .expect("etiqueta del ítem");
-                    let accion = section
-                        .item_attribute_value(k, "action", None)
-                        .expect("acción del ítem");
-                    assert_eq!(etiqueta.str(), Some(label));
-                    assert_eq!(accion.str(), Some(action_id));
-                }
-            }
+            verifica_secciones(&submenu, sections);
         }
     }
 
@@ -699,15 +842,27 @@ mod tests {
     fn menu_y_comandos_coherentes() {
         let mut en_menu = HashSet::new();
         for &(_, sections) in MENUBAR_SPEC {
-            for entries in sections {
-                for &(label, action_id) in *entries {
-                    let cmd = ALL_COMMANDS
-                        .iter()
-                        .find(|c| c.action_id() == action_id)
-                        .unwrap_or_else(|| panic!("ítem sin comando: {action_id}"));
-                    assert_eq!(cmd.label(), label, "etiqueta desalineada en {action_id}");
-                    en_menu.insert(action_id);
+            for (label, action_id) in todas_las_entradas(sections) {
+                // Los radios de tema son acciones detalladas
+                // `win.theme::<id>`: el comando es el de la acción base.
+                let (base, target) = match action_id.split_once("::") {
+                    Some((base, target)) => (base, Some(target)),
+                    None => (action_id, None),
+                };
+                let cmd = ALL_COMMANDS
+                    .iter()
+                    .find(|c| c.action_id() == base)
+                    .unwrap_or_else(|| panic!("ítem sin comando: {action_id}"));
+                match target {
+                    // Con objetivo la etiqueta nombra la opción, no al
+                    // comando; el objetivo debe ser un modo real.
+                    Some(target) => assert!(
+                        ThemeMode::from_id(target).is_some(),
+                        "objetivo desconocido en {action_id}"
+                    ),
+                    None => assert_eq!(cmd.label(), label, "etiqueta desalineada en {action_id}"),
                 }
+                en_menu.insert(base);
             }
         }
         for &cmd in ALL_COMMANDS {
@@ -717,6 +872,112 @@ mod tests {
                 cmd.action_id()
             );
         }
+    }
+
+    /// View ▸ Theme: el desplegable tiene un radio por [`ThemeMode`] y cada
+    /// objetivo `win.theme::<id>` corresponde a un modo real.
+    #[test]
+    fn radios_de_tema_cubren_los_modos() {
+        let view = MENUBAR_SPEC
+            .iter()
+            .find(|(title, _)| *title == "View")
+            .expect("submenú View")
+            .1;
+        let theme = view
+            .iter()
+            .flat_map(|section| section.iter())
+            .find_map(|&item| match item {
+                Submenu(title, sections) if title == "Theme" => Some(sections),
+                _ => None,
+            })
+            .expect("desplegable View ▸ Theme");
+        let radios: Vec<&str> = todas_las_entradas(theme)
+            .into_iter()
+            .filter_map(|(_, action_id)| action_id.strip_prefix("win.theme::"))
+            .collect();
+        assert_eq!(radios.len(), ThemeMode::ALL.len());
+        for id in &radios {
+            assert!(
+                ThemeMode::ALL.contains(&ThemeMode::from_id(id).unwrap()),
+                "objetivo desconocido: {id}"
+            );
+        }
+        for mode in ThemeMode::ALL {
+            assert!(radios.contains(&mode.id()), "falta el radio de {mode:?}");
+        }
+    }
+
+    /// Receptor centinela para pruebas de despacho: solo `set_theme` deja
+    /// marca; el resto de comandos son no-ops.
+    struct FakeHost {
+        theme: std::cell::Cell<Option<ThemeMode>>,
+    }
+
+    impl Commands for FakeHost {
+        fn marketplace(&self) {}
+        fn new(&self) {}
+        fn open(&self) {}
+        fn open_folder(&self) {}
+        fn save(&self) {}
+        fn save_as(&self) {}
+        fn close_tab(&self) {}
+        fn undo(&self) {}
+        fn redo(&self) {}
+        fn find(&self) {}
+        fn replace(&self) {}
+        fn toggle_mode(&self) {}
+        fn toggle_explorer(&self) {}
+        fn toggle_inspector(&self) {}
+        fn show_all_files(&self, _visible: bool) {}
+        fn show_hidden_files(&self, _visible: bool) {}
+        fn refresh_files(&self) {}
+        fn toggle_logs(&self) {}
+        fn set_theme(&self, mode: ThemeMode) {
+            self.theme.set(Some(mode));
+        }
+        fn new_pipeline(&self) {}
+        fn open_pipeline(&self) {}
+        fn import_pipeline(&self) {}
+        fn export_pipeline(&self) {}
+        fn save_pipeline(&self) {}
+        fn save_pipeline_as(&self) {}
+        fn new_work(&self) {}
+        fn open_work(&self) {}
+        fn update_from_library(&self) {}
+        fn create_step(&self) {}
+        fn run_selected(&self) {}
+        fn stop(&self) {}
+        fn about(&self) {}
+        fn shortcuts(&self) {}
+    }
+
+    /// El radio `win.theme` mapea cada objetivo a su [`ThemeMode`], actualiza
+    /// su estado (la marca del menú sigue al estado) y RECHAZA objetivos
+    /// desconocidos sin despachar ni cambiar de estado.
+    #[test]
+    fn radio_tema_despacha_objetivos_y_rechaza_desconocidos() {
+        let fake = Rc::new(FakeHost {
+            theme: std::cell::Cell::new(None),
+        });
+        let host: Rc<dyn Commands> = fake.clone();
+        let group = action_group(&host);
+        let action = group
+            .lookup_action("theme")
+            .expect("acción win.theme")
+            .downcast::<gio::SimpleAction>()
+            .unwrap();
+        let state = || action.state().and_then(|v| v.get::<String>());
+        assert_eq!(state().as_deref(), Some(ThemeMode::System.id()));
+
+        for mode in ThemeMode::ALL {
+            group.activate_action("theme", Some(&mode.id().to_variant()));
+            assert_eq!(fake.theme.get(), Some(mode));
+            assert_eq!(state().as_deref(), Some(mode.id()));
+        }
+
+        group.activate_action("theme", Some(&"sepia".to_variant()));
+        assert_eq!(fake.theme.get(), Some(ThemeMode::System));
+        assert_eq!(state().as_deref(), Some(ThemeMode::System.id()));
     }
 
     /// Gramática de aceleradores de GTK: grupos `<Modificador>` seguidos de
