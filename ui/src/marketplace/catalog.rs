@@ -149,7 +149,10 @@ pub fn decode_asset(
     })
 }
 
-pub fn fetch(repository: &str, reference: &str) -> Result<Vec<CatalogItem>, String> {
+pub fn fetch(
+    repository: &str,
+    reference: &str,
+) -> Result<Vec<(String, Result<CatalogItem, String>)>, String> {
     validate_repository(repository)?;
     if reference.is_empty() || reference.len() > 200 {
         return Err("Enter a branch, tag or commit".to_owned());
@@ -192,29 +195,76 @@ pub fn fetch(repository: &str, reference: &str) -> Result<Vec<CatalogItem>, Stri
     if paths.len() > 128 {
         return Err("Catalog contains more than 128 assets".to_owned());
     }
-    let mut items = Vec::new();
+    let mut fetched = Vec::new();
     for path in paths {
         let text = get(
             &agent,
             &format!("https://raw.githubusercontent.com/{repository}/{revision}/{path}"),
             1024 * 1024,
-        )?;
-        items.push(
-            decode_asset(repository, revision, path, &text).map_err(|e| format!("{path}: {e}"))?,
         );
+        fetched.push((path.to_owned(), text));
     }
-    items.sort_by_key(|item| {
-        (
-            matches!(item.asset, Asset::Pipeline(_)),
+    let mut items = decode_catalog(repository, revision, &fetched);
+    items.sort_by_key(|(path, item)| match item {
+        Ok(item) => (
+            0u8,
+            matches!(item.asset, Asset::Pipeline(_)) as u8,
             item.name().to_lowercase(),
-        )
+        ),
+        Err(_) => (1u8, 0u8, path.to_lowercase()),
     });
     Ok(items)
+}
+
+/// Decodes fetched catalog files independently: one unreadable asset is
+/// reported next to the readable ones instead of hiding the whole catalog.
+fn decode_catalog(
+    repository: &str,
+    revision: &str,
+    fetched: &[(String, Result<String, String>)],
+) -> Vec<(String, Result<CatalogItem, String>)> {
+    fetched
+        .iter()
+        .map(|(path, text)| {
+            let result = match text {
+                Ok(text) => decode_asset(repository, revision, path, text),
+                Err(e) => Err(e.clone()),
+            };
+            (path.clone(), result)
+        })
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn one_unreadable_asset_does_not_hide_the_rest_of_the_catalog() {
+        let revision = "a".repeat(40);
+        let fetched = vec![
+            (
+                "tools/demo.json".to_owned(),
+                Ok(
+                    r#"{"schema_version":1,"id":"demo","version":"1","name":"Demo","executable":"demo","inputs":{},"parameters":{},"outputs":{},"arguments":[]}"#
+                        .to_owned(),
+                ),
+            ),
+            ("tools/broken.json".to_owned(), Ok("{".to_owned())),
+            ("tools/unfetched.json".to_owned(), Err("connection reset".to_owned())),
+        ];
+        let entries = decode_catalog("owner/registry", &revision, &fetched);
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0].0, "tools/demo.json");
+        assert!(matches!(&entries[0].1, Ok(item) if item.name() == "Demo"));
+        assert_eq!(entries[1].0, "tools/broken.json");
+        let error = entries[1].1.as_ref().err().expect("broken.json must fail");
+        assert!(error.contains("Invalid tool"));
+        assert_eq!(
+            entries[2].1.as_ref().err().expect("unfetched.json must fail"),
+            "connection reset"
+        );
+    }
+
     #[test]
     fn repository_and_catalog_paths_cannot_escape_github_or_asset_folders() {
         for repository in [
@@ -244,15 +294,15 @@ mod tests {
     #[test]
     #[ignore = "requires public GitHub network access"]
     fn live_registry_contains_tools_and_native_pipelines() {
-        let items = fetch(DEFAULT_REPOSITORY, DEFAULT_REF).unwrap();
-        assert!(items
+        let entries = fetch(DEFAULT_REPOSITORY, DEFAULT_REF).unwrap();
+        assert!(entries
             .iter()
-            .any(|item| matches!(item.asset, Asset::Tool(_))));
-        assert!(items
+            .any(|(_, item)| matches!(item, Ok(item) if matches!(item.asset, Asset::Tool(_)))));
+        assert!(entries
             .iter()
-            .any(|item| matches!(item.asset, Asset::Pipeline(_))));
-        for item in items {
-            assert_eq!(item.revision.len(), 40);
+            .any(|(_, item)| matches!(item, Ok(item) if matches!(item.asset, Asset::Pipeline(_)))));
+        for (_, item) in entries {
+            assert_eq!(item.expect("live catalog assets decode").revision.len(), 40);
         }
     }
 }

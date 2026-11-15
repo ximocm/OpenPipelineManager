@@ -22,7 +22,10 @@ fn installed_tool_roundtrips_provenance_and_refuses_silent_replacement() {
     });
     library.save(&tool, SaveMode::CreateNew).unwrap();
     assert_eq!(library.load("fastqc").unwrap(), tool);
-    assert_eq!(library.list().unwrap(), vec![tool.clone()]);
+    let listed = library.list().unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].0, "fastqc");
+    assert_eq!(listed[0].1.as_ref().unwrap(), &tool);
     tool.description = "Changed".into();
     assert!(library.save(&tool, SaveMode::CreateNew).is_err());
     assert_ne!(
@@ -77,6 +80,59 @@ fn optional_arguments_are_explicit_and_unselected_fields_do_not_become_required(
     assert!(configured.command.ends_with("> {report}"));
     options.enabled.insert("unknown".into());
     assert!(tool.instantiate("trim", &options).is_err());
+}
+
+#[test]
+fn boolean_flags_and_optional_input_groups_stay_off_until_selected() {
+    let fixture =
+        serde_json::from_str::<serde_json::Value>(include_str!("fixtures/fastqc.json")).unwrap();
+    let mut doc = fixture;
+    doc["parameters"]["extract"] = serde_json::json!({
+        "type": "boolean", "description": "Unpack reports", "required": false, "default": false
+    });
+    doc["inputs"]["contaminants"] = serde_json::json!({
+        "type": "file", "description": "Contaminant list", "required": false
+    });
+    doc["arguments"] = serde_json::json!([
+        {"when": "extract", "args": ["--extract"]},
+        {"when": "contaminants", "args": ["--contaminants", "{contaminants}"]},
+        "{reads}"
+    ]);
+    let tool = ToolDefinition::from_json(&doc.to_string()).unwrap();
+    let options = tool.default_options();
+    assert!(!options.enabled.contains("extract"));
+    assert!(!options.enabled.contains("contaminants"));
+    let plain = tool.instantiate("plain", &options).unwrap();
+    assert!(!plain.command.contains("extract"));
+    assert!(!plain.command.contains("contaminants"));
+    let mut on = options;
+    on.enabled.insert("extract".into());
+    on.enabled.insert("contaminants".into());
+    let configured = tool.instantiate("configured", &on).unwrap();
+    assert!(configured.command.contains("'--extract'"));
+    assert!(configured
+        .command
+        .contains("'--contaminants' {contaminants}"));
+    assert!(configured
+        .inputs
+        .iter()
+        .any(|spec| spec.key == "contaminants" && spec.required));
+    assert!(!configured.parameters.iter().any(|spec| spec.key == "extract"));
+}
+
+#[test]
+fn list_reports_invalid_files_alongside_loadable_tools() {
+    let root = common::temp_dir("tool-list-resilience");
+    let library = ToolLibrary::new(root.join("tools"));
+    library.save(&fastqc(), SaveMode::CreateNew).unwrap();
+    fs::write(library.root().join("broken.json"), "{").unwrap();
+    let listed = library.list().unwrap();
+    assert_eq!(listed.len(), 2);
+    assert_eq!(listed[0].0, "broken");
+    assert!(listed[0].1.is_err());
+    assert_eq!(listed[1].0, "fastqc");
+    assert_eq!(listed[1].1.as_ref().unwrap(), &fastqc());
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]

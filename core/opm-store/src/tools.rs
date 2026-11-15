@@ -152,7 +152,11 @@ impl ToolDefinition {
             }
             if !matches!(
                 field.kind,
-                FieldType::Text | FieldType::Integer | FieldType::File | FieldType::Folder
+                FieldType::Text
+                    | FieldType::Integer
+                    | FieldType::Boolean
+                    | FieldType::File
+                    | FieldType::Folder
             ) || (field.multiple && !self.inputs.contains_key(name))
                 || (field.multiple && !matches!(field.kind, FieldType::File | FieldType::Folder))
                 || (self.outputs.contains_key(name)
@@ -174,8 +178,12 @@ impl ToolDefinition {
                         !field.min.is_some_and(|min| (*n as f64) < min)
                             && !field.max.is_some_and(|max| (*n as f64) > max)
                     }
+                    (FieldType::Boolean, Value::Bool(_)) => true,
                     (_, Value::Str(text))
-                        if field.kind != FieldType::Integer && !field.multiple =>
+                        if matches!(
+                            field.kind,
+                            FieldType::Text | FieldType::File | FieldType::Folder
+                        ) && !field.multiple =>
                     {
                         !text.contains('\0')
                     }
@@ -226,14 +234,20 @@ impl ToolDefinition {
                     }
                 }
                 ToolArgument::Optional { when, args } => {
-                    if !self.parameters.contains_key(when) {
-                        return Err(error(format!("Unknown optional parameter: {when}")));
+                    if !self.inputs.contains_key(when) && !self.parameters.contains_key(when) {
+                        return Err(error(format!("Unknown optional field: {when}")));
                     }
                     self.check_arguments(args, fields, depth + 1)?;
                 }
             }
         }
         Ok(())
+    }
+
+    /// The field behind an optional argument group key. Groups may gate
+    /// optional inputs as well as parameters.
+    pub fn optional_field(&self, name: &str) -> Option<&ToolField> {
+        self.parameters.get(name).or_else(|| self.inputs.get(name))
     }
 
     pub fn optional_keys(&self) -> BTreeSet<String> {
@@ -256,9 +270,13 @@ impl ToolDefinition {
                 .optional_keys()
                 .into_iter()
                 .filter(|name| {
-                    self.parameters[name].default.as_ref().is_some_and(|value| {
-                        *value != Value::Null && !matches!(value, Value::Str(s) if s.is_empty())
-                    })
+                    self.optional_field(name)
+                        .and_then(|field| field.default.as_ref())
+                        .is_some_and(|value| {
+                            *value != Value::Null
+                                && !matches!(value, Value::Str(s) if s.is_empty())
+                                && !matches!(value, Value::Bool(false))
+                        })
                 })
                 .collect(),
             counts: self
@@ -461,7 +479,9 @@ impl ToolLibrary {
         }
         Ok(doc)
     }
-    pub fn list(&self) -> Result<Vec<ToolDefinition>, StoreError> {
+    /// Lists every tool file with its own result, so one invalid definition
+    /// cannot hide the rest of the library.
+    pub fn list(&self) -> Result<Vec<(String, Result<ToolDefinition, StoreError>)>, StoreError> {
         let entries = match fs::read_dir(&self.root) {
             Ok(entries) => entries,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -470,15 +490,22 @@ impl ToolLibrary {
         let mut tools = Vec::new();
         for entry in entries {
             let path = entry?.path();
-            if path.extension().and_then(|s| s.to_str()) == Some("json") {
-                let id = path
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .ok_or_else(|| error("Invalid tool filename"))?;
-                tools.push(self.load(id)?);
+            if path.extension().and_then(|s| s.to_str()) != Some("json") {
+                continue;
             }
+            let id = path
+                .file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            tools.push((id.clone(), self.load(&id)));
         }
-        tools.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        tools.sort_by(|a, b| {
+            let name = |entry: &(String, Result<ToolDefinition, StoreError>)| match &entry.1 {
+                Ok(tool) => tool.name.to_lowercase(),
+                Err(_) => entry.0.clone(),
+            };
+            name(a).cmp(&name(b))
+        });
         Ok(tools)
     }
     pub fn save(&self, tool: &ToolDefinition, mode: SaveMode) -> Result<(), StoreError> {

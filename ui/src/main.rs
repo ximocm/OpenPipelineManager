@@ -3606,7 +3606,18 @@ mod tests {
         assert!(gtk4::init().is_ok());
         let app = Application::builder().application_id("app.opm.marketplace.smoke").flags(gio::ApplicationFlags::NON_UNIQUE).build();
         app.register(None::<&gio::Cancellable>).unwrap();
-        let tool = opm_store::ToolDefinition::from_json(include_str!("../../core/opm-store/tests/fixtures/fastqc.json")).unwrap();
+        // Registry descriptors may gate optional inputs and use boolean flags;
+        // the brush dialog must survive both (regression: palette panicked on
+        // input-gated optional keys).
+        let mut doc = serde_json::from_str::<serde_json::Value>(include_str!("../../core/opm-store/tests/fixtures/fastqc.json")).unwrap();
+        doc["parameters"]["extract"] = serde_json::json!({"type": "boolean", "description": "Unpack reports", "required": false, "default": false});
+        doc["inputs"]["contaminants"] = serde_json::json!({"type": "file", "description": "Contaminant list", "required": false});
+        doc["arguments"] = serde_json::json!([
+            {"when": "extract", "args": ["--extract"]},
+            {"when": "contaminants", "args": ["--contaminants", "{contaminants}"]},
+            "--outdir", "{outdir}", "{reads}"
+        ]);
+        let tool = opm_store::ToolDefinition::from_json(&doc.to_string()).unwrap();
         marketplace::tool_library().save(&tool, SaveMode::CreateNew).unwrap();
         let cmds = build_window(&app, WindowScope::Design, &[]);
         cmds.show_view(CenterView::Editor);

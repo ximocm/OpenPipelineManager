@@ -9,6 +9,11 @@ The format follows Keep a Changelog-style sections, and the project uses semanti
 ### Added
 
 - Theme picker under View → Theme: a submenu with Light, Dark and Follow system radio options. The choice is saved between sessions, applies to every open window at once and follows desktop theme changes while on Follow system.
+- Tool definitions accept boolean fields and optional argument groups around optional inputs, so registries can describe on/off flags and optional reference files such as the FastQC 0.13.0 descriptor.
+
+### Fixed
+
+- Marketplace catalog and installed tool listings load every readable definition even when one tool file is invalid: the broken entry is listed with its error instead of replacing the whole list.
 
 ## 0.3.2 - 2026-11-14
 

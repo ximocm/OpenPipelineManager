@@ -115,11 +115,23 @@ fn installed(
     clear(list, rows);
     match tool_library().list() {
         Err(err) => list.append(&text_label(&err.to_string())),
-        Ok(tools) if tools.is_empty() => list.append(&text_label(
+        Ok(entries) if entries.is_empty() => list.append(&text_label(
             "No tools installed. Browse Marketplace or import a tool JSON.",
         )),
-        Ok(tools) => {
-            for tool in tools {
+        Ok(entries) => {
+            for (id, result) in entries {
+                let tool = match result {
+                    Ok(tool) => tool,
+                    Err(err) => {
+                        let (row, _) =
+                            item_row(&id, &err.to_string(), "Definition could not be loaded");
+                        let text = format!("{id} {err}").to_lowercase();
+                        row.set_visible(text.contains(query));
+                        list.append(&row);
+                        rows.borrow_mut().push((row, text));
+                        continue;
+                    }
+                };
                 let detail = format!(
                     "{} · version {} · program {}",
                     tool.id, tool.version, tool.executable
@@ -352,9 +364,31 @@ pub fn open(
                     Err(e) => {
                         status.set_text(&format!("{e}\nYour installed tools are still available."))
                     }
-                    Ok(items) => {
-                        status.set_text(&format!("{} definitions available", items.len()));
-                        for item in items {
+                    Ok(entries) => {
+                        let broken = entries.iter().filter(|(_, item)| item.is_err()).count();
+                        let mut status_text =
+                            format!("{} definitions available", entries.len() - broken);
+                        if broken > 0 {
+                            status_text
+                                .push_str(&format!(" · {broken} could not be read, shown below"));
+                        }
+                        status.set_text(&status_text);
+                        for (path, result) in entries {
+                            let item = match result {
+                                Ok(item) => item,
+                                Err(err) => {
+                                    let (row, _) = item_row(
+                                        &path,
+                                        &err.to_string(),
+                                        "Catalog entry could not be read",
+                                    );
+                                    let text = format!("{path} {err}").to_lowercase();
+                                    row.set_visible(text.contains(&query.text().to_lowercase()));
+                                    list.append(&row);
+                                    rows.borrow_mut().push((row, text));
+                                    continue;
+                                }
+                            };
                             let version = match &item.asset {
                                 Asset::Tool(tool) => {
                                     format!("Tool {} · program {}", tool.version, tool.executable)

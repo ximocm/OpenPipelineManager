@@ -94,15 +94,30 @@ impl ToolPalette {
             Err(err) => {
                 self.rows.append(&gtk::Label::new(Some(&err.to_string())));
             }
-            Ok(tools) if tools.is_empty() => {
+            Ok(entries) if entries.is_empty() => {
                 let label = gtk::Label::new(Some(
                     "No tools installed yet.\nOpen Marketplace or import a tool JSON.",
                 ));
                 label.set_wrap(true);
                 self.rows.append(&label);
             }
-            Ok(tools) => {
-                for tool in tools {
+            Ok(entries) => {
+                for (id, result) in entries {
+                    let tool = match result {
+                        Ok(tool) => tool,
+                        Err(err) => {
+                            let row = gtk::ListBoxRow::new();
+                            let label = gtk::Label::new(Some(&format!("{id}: {err}")));
+                            label.set_wrap(true);
+                            label.set_xalign(0.0);
+                            row.set_child(Some(&label));
+                            self.rows.append(&row);
+                            let text = format!("{id} {err}").to_lowercase();
+                            row.set_visible(text.contains(&self.search.text().to_lowercase()));
+                            self.filter_rows.borrow_mut().push((row, text));
+                            continue;
+                        }
+                    };
                     let row = gtk::ListBoxRow::new();
                     let button =
                         gtk::Button::with_label(&format!("{}\n{}", tool.name, tool.version));
@@ -153,7 +168,9 @@ pub fn configure(
     for key in tool.optional_keys() {
         let check = gtk::CheckButton::with_label(&format!("Include {}", key.replace('_', " ")));
         check.set_active(options.enabled.contains(&key));
-        check.set_tooltip_text(Some(&tool.parameters[&key].description));
+        check.set_tooltip_text(Some(
+            tool.optional_field(&key).map(|f| f.description.as_str()).unwrap_or(""),
+        ));
         body.append(&check);
         toggles.push((key, check));
     }
